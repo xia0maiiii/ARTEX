@@ -118,6 +118,9 @@ func run() int {
 		Addr:              *addr,
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		// Reap idle keep-alive connections. No WriteTimeout: it would cut off
+		// long-lived SSE streams.
+		IdleTimeout: 120 * time.Second,
 	}
 
 	go func() {

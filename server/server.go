@@ -1171,7 +1171,7 @@ func (s *Server) Handler() http.Handler {
 	top := http.NewServeMux()
 	top.HandleFunc(mcpEndpointPath, s.serveMCP)
 	top.Handle("/", s.requireBasicAuth(root))
-	return top
+	return withCompression(top)
 }
 
 // --- handlers ---
@@ -1220,24 +1220,19 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 	}
 	out["llm_configured"] = s.engine.ReadyFor(t)
 
-	st, _ := t.Store.Stats()
-	out["exploration"] = st
+	// One aggregate for kind totals + running intents + met goals; this endpoint
+	// is polled every few seconds per open task view.
+	nodeCounts, err := t.Store.StatusCounts()
+	if err == nil {
+		out["exploration"] = nodeCounts.ByKind
+	} else {
+		out["exploration"] = nil
+	}
 
 	// per-task running state + heartbeat (distinct from "LLM configured").
-	intents, _ := t.Store.ListByKind(db.KindIntent, 100000)
-	inFlight := 0
-	for _, in := range intents {
-		if in.State == "running" {
-			inFlight++
-		}
-	}
-	goals, _ := t.Store.ListByKind(db.KindGoal, 10000)
-	goalsMet := 0
-	for _, g := range goals {
-		if g.State == "met" {
-			goalsMet++
-		}
-	}
+	inFlight := nodeCounts.IntentsRunning
+	goalsTotal := nodeCounts.ByKind[db.KindGoal]
+	goalsMet := nodeCounts.GoalsMet
 	last := s.engine.LastActivity(t.ID)
 	paused := s.engine.IsPaused(t.ID)
 	activeCalls := s.engine.ActiveLLMCalls(t.ID)
@@ -1267,7 +1262,7 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 		"llm_in_flight": activeCalls,
 		"last_activity": last,
 		"stalled":       stalled,
-		"goals_total":   len(goals),
+		"goals_total":   goalsTotal,
 		"goals_met":     goalsMet,
 	}
 	writeJSON(w, 200, out)

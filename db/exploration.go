@@ -1199,6 +1199,40 @@ func (s *ExplorationStore) Stats() (map[string]int, error) {
 	return out, rows.Err()
 }
 
+// NodeStatusCounts is what the task status poll needs from the node graph.
+type NodeStatusCounts struct {
+	ByKind         map[string]int // same shape as Stats()
+	IntentsRunning int
+	GoalsMet       int
+}
+
+// StatusCounts returns per-kind totals plus running intents and met goals in a
+// single aggregate. The task detail page polls this every few seconds, so it
+// must not load node rows (payload JSONB) just to count states.
+func (s *ExplorationStore) StatusCounts() (NodeStatusCounts, error) {
+	out := NodeStatusCounts{ByKind: map[string]int{}}
+	rows, err := s.db.Query(`
+SELECT kind, count(*),
+       count(*) FILTER (WHERE kind='intent' AND state='running'),
+       count(*) FILTER (WHERE kind='goal' AND state='met')
+FROM exploration_nodes WHERE exploration_id=$1 GROUP BY kind`, s.expID)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var kind string
+		var total, running, met int
+		if err := rows.Scan(&kind, &total, &running, &met); err != nil {
+			return out, err
+		}
+		out.ByKind[kind] = total
+		out.IntentsRunning += running
+		out.GoalsMet += met
+	}
+	return out, rows.Err()
+}
+
 // --- activity (poll by global id cursor) ---
 
 // AppendActivity records one worker step and returns its id.
