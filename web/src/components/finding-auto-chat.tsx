@@ -9,8 +9,10 @@ import { Transcript } from "@/components/transcript";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton } from "@/components/ui/input-group";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { usePoll } from "@/hooks/use-poll";
 import { useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
+import { keepIfUnchanged } from "@/lib/poll";
 import type { Activity, Conversation } from "@/lib/types";
 
 function mergeActivities(oldItems: Activity[], incoming: Activity[]) {
@@ -104,28 +106,33 @@ export function FindingAutoChat({
     void createConversation();
   }, [conversation, createConversation, initialConversationId, manualEmpty, open, safeTitle, storageKey]);
 
-  React.useEffect(() => {
-    if (!historyOpen && !running) return;
-    let live = true;
-    let timer: ReturnType<typeof setTimeout>;
-    const load = async () => {
+  // historySeq drops a response that was started before the finding / agent / panel state
+  // below changed. An unchanged list keeps the previous array.
+  const historySeq = React.useRef(0);
+  const refreshHistory = usePoll(
+    async () => {
+      const seq = historySeq.current;
       try {
         const items = await api.conversations();
-        if (!live) return;
+        if (seq !== historySeq.current) return;
         const prefix = `漏洞 #${findingId} ·`;
-        setHistory(items.filter((item) => item.agent_key === agentKey && item.title.startsWith(prefix)));
+        const next = items.filter((item) => item.agent_key === agentKey && item.title.startsWith(prefix));
+        setHistory((prev) => keepIfUnchanged(prev, next));
       } catch {
-        if (live && historyOpen) setHistory([]);
-      } finally {
-        if (live && (historyOpen || running)) timer = setTimeout(() => void load(), 2000);
+        if (seq === historySeq.current && historyOpen) setHistory([]);
       }
-    };
-    void load();
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
-  }, [agentKey, findingId, historyOpen, running]);
+    },
+    2000,
+    { enabled: historyOpen || running, immediate: false },
+  );
+
+  // Load right away whenever polling (re)starts or switches finding / agent.
+  React.useEffect(() => {
+    void agentKey;
+    void findingId;
+    historySeq.current++;
+    if (historyOpen || running) void refreshHistory();
+  }, [agentKey, findingId, historyOpen, running, refreshHistory]);
 
   React.useEffect(() => {
     if (!open || !conversation) return;

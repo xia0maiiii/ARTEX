@@ -15,8 +15,10 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Spinner } from "@/components/ui/spinner";
+import { usePoll } from "@/hooks/use-poll";
 import { useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
+import { keepIfUnchanged } from "@/lib/poll";
 import type {
   Finding,
   FindingCase,
@@ -468,29 +470,29 @@ export function FindingCaseList({
   React.useEffect(() => {
     setPage(1);
   }, [key]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh is an explicit reload requested after grouping/retry.
-  React.useEffect(() => {
-    let active = true;
-    let timer: ReturnType<typeof setTimeout>;
-    async function load() {
+  // querySeq drops a response for a previous filter / page; an unchanged page keeps the
+  // previous object, so the 5s poll does not re-render the list.
+  const querySeq = React.useRef(0);
+  const reload = usePoll(
+    async () => {
+      const seq = querySeq.current;
       try {
         const v = await api.findingCases({ ...JSON.parse(key), page, pageSize });
-        if (active) {
-          setData(v);
-          setError("");
-        }
+        if (seq !== querySeq.current) return;
+        setData((prev) => keepIfUnchanged(prev, v));
+        setError("");
       } catch (e) {
-        if (active) setError((e as Error).message);
-      } finally {
-        if (active) timer = setTimeout(load, 5000);
+        if (seq === querySeq.current) setError((e as Error).message);
       }
-    }
-    void load();
-    return () => {
-      active = false;
-      clearTimeout(timer);
-    };
-  }, [key, page, pageSize, refresh]);
+    },
+    5000,
+    { immediate: false },
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh is an explicit reload requested after grouping/retry.
+  React.useEffect(() => {
+    querySeq.current++;
+    void reload();
+  }, [key, page, pageSize, refresh, reload]);
   React.useEffect(() => {
     if (data) onTotal?.(data.total);
   }, [data, onTotal]);

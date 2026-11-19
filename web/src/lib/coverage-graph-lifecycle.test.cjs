@@ -124,6 +124,8 @@ function mount() {
         return { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) };
       if (id === "@antv/g6") return { Graph };
       if (id === "@/i18n/use-ui-translation") return { useUITranslation: () => ({ ui, liveUI: ui }) };
+      // The topology-mapping poll is idle here (no mapping conversation); stub the hook.
+      if (id === "@/hooks/use-poll") return { usePoll: () => async () => undefined };
       if (id === "@/lib/api")
         return {
           api: {

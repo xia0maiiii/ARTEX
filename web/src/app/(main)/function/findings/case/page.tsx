@@ -24,8 +24,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { usePoll } from "@/hooks/use-poll";
 import { useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
+import { keepIfUnchanged } from "@/lib/poll";
 import type { FindingCaseDetail } from "@/lib/types";
 
 function CaseDetail() {
@@ -39,29 +41,29 @@ function CaseDetail() {
   const [busy, setBusy] = React.useState(false);
   const [selected, setSelected] = React.useState<Set<string>>(() => new Set());
   const [refresh, setRefresh] = React.useState(0);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh explicitly reloads group after a detach.
-  React.useEffect(() => {
-    let active = true;
-    let timer: ReturnType<typeof setTimeout>;
-    async function load() {
+  // querySeq drops a response for a previous case / context; an unchanged case keeps the
+  // previous object.
+  const querySeq = React.useRef(0);
+  const reload = usePoll(
+    async () => {
+      const seq = querySeq.current;
       try {
         const v = await api.getFindingCase(id, contextTask);
-        if (active) {
-          setData(v);
-          setError("");
-        }
+        if (seq !== querySeq.current) return;
+        setData((prev) => keepIfUnchanged(prev, v));
+        setError("");
       } catch (e) {
-        if (active) setError((e as Error).message);
-      } finally {
-        if (active) timer = setTimeout(load, 5000);
+        if (seq === querySeq.current) setError((e as Error).message);
       }
-    }
-    if (id) void load();
-    return () => {
-      active = false;
-      clearTimeout(timer);
-    };
-  }, [id, contextTask, refresh]);
+    },
+    5000,
+    { enabled: !!id, immediate: false },
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh explicitly reloads group after a detach.
+  React.useEffect(() => {
+    querySeq.current++;
+    if (id) void reload();
+  }, [id, contextTask, refresh, reload]);
   const readOnly = !!contextTask && contextTask !== data?.case.task_id;
   const select = (fid: string, on: boolean) =>
     setSelected((v) => {

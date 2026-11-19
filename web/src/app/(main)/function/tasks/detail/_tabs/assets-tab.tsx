@@ -37,9 +37,11 @@ import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { usePoll } from "@/hooks/use-poll";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import { parseCompanyScopeText } from "@/lib/company-scope";
+import { keepIfUnchanged } from "@/lib/poll";
 import { taskAssetSourceLabel } from "@/lib/task-assets";
 import type { Asset, NewAssetType } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -385,12 +387,15 @@ export function AssetsTab({ taskId }: { taskId: string }) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: these controls intentionally reset server pagination.
   React.useEffect(() => setPage(0), [tab, size, query]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey is an explicit manual-reload trigger.
-  React.useEffect(() => {
-    let active = true;
-    const dsl = query.trim();
-    const request = ++assetsRequestRef.current;
-    const load = async () => {
+  // assetsRequestRef numbers the current query (bumped by the effect below), so a response
+  // for a superseded query is dropped. debouncePendingRef holds the poll back while a new
+  // query waits out its debounce, so a tick never sends a half-typed DSL.
+  const debouncePendingRef = React.useRef(true);
+  const refreshAssets = usePoll(
+    async () => {
+      if (debouncePendingRef.current) return;
+      const dsl = query.trim();
+      const request = assetsRequestRef.current;
       setLoading(true);
       try {
         // The search always stays within this task's assets: taskAssets and
@@ -401,13 +406,13 @@ export function AssetsTab({ taskId }: { taskId: string }) {
             : api.taskAssets(taskId, tab, size, page * size),
           api.assetCounts(taskId),
         ]);
-        if (!active || assetsRequestRef.current !== request) return;
-        setRows(current.assets);
+        if (assetsRequestRef.current !== request) return;
+        setRows((prev) => keepIfUnchanged(prev, current.assets));
         setTotal(current.total);
-        setCounts(nextCounts ?? {});
+        setCounts((prev) => keepIfUnchanged(prev, nextCounts ?? {}));
         setDslError("");
       } catch (reason) {
-        if (!active || assetsRequestRef.current !== request) return;
+        if (assetsRequestRef.current !== request) return;
         const message = String((reason as Error)?.message ?? reason);
         if (dsl) {
           setDslError(message);
@@ -417,21 +422,31 @@ export function AssetsTab({ taskId }: { taskId: string }) {
           toast.error(liveUI("screen.b4289647e26c27", { v0: message }));
         }
       } finally {
-        if (active && assetsRequestRef.current === request) {
+        if (assetsRequestRef.current === request) {
           setLoading(false);
           setLoaded(true);
         }
       }
-    };
-    // Debounce DSL keystrokes; plain (re)loads and polling run immediately.
-    const debounce = setTimeout(() => void load(), dsl ? 400 : 0);
-    const timer = setInterval(() => void load(), 10_000);
-    return () => {
-      active = false;
-      clearTimeout(debounce);
-      clearInterval(timer);
-    };
-  }, [page, query, refreshKey, size, tab, taskId, liveUI]);
+    },
+    10_000,
+    { immediate: false },
+  );
+
+  // A new query (task / tab / page / size / DSL, or a manual refresh) loads right away;
+  // DSL keystrokes are debounced first. The 10s poll then keeps the current query fresh.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: every listed control starts a new query and refreshKey is an explicit manual-reload trigger; the poll reads them itself.
+  React.useEffect(() => {
+    assetsRequestRef.current++;
+    debouncePendingRef.current = true;
+    const debounce = setTimeout(
+      () => {
+        debouncePendingRef.current = false;
+        void refreshAssets();
+      },
+      query.trim() ? 400 : 0,
+    );
+    return () => clearTimeout(debounce);
+  }, [page, query, refreshKey, size, tab, taskId, refreshAssets]);
 
   React.useEffect(() => {
     const maxPage = Math.max(0, Math.ceil(total / size) - 1);

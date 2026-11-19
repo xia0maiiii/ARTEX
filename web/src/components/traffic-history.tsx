@@ -44,8 +44,10 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { SortableHead } from "@/components/ui/sortable-head";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { usePoll } from "@/hooks/use-poll";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
+import { keepIfUnchanged } from "@/lib/poll";
 import { useStoredSortPreference } from "@/lib/sort-preference";
 import type { TrafficDetail, TrafficExchange, TrafficHost, TrafficResp } from "@/lib/types";
 import { cn, copyText } from "@/lib/utils";
@@ -231,12 +233,13 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
   }, [hostQ, queryQ, method, size, bodyQ, pathQ, statusFilter, respMinQ, respMaxQ, sort, taskId]);
 
   // Load the current page. Auto-refresh only on page 0 (newest) so paging back
-  // through history isn't yanked out from under the user.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadTick is an explicit manual-refetch trigger.
-  React.useEffect(() => {
-    let alive = true;
-    const load = () => {
-      api
+  // through history isn't yanked out from under the user. querySeq drops a response for a
+  // previous page / filter; unchanged results keep the previous objects (no re-render).
+  const querySeq = React.useRef(0);
+  const reload = usePoll(
+    () => {
+      const seq = querySeq.current;
+      const traffic = api
         .traffic(page, size, hostQ, method, queryQ, {
           taskId,
           body: bodyQ,
@@ -248,33 +251,33 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
           order: sort.direction,
         })
         .then((r) => {
-          if (alive) setTraffic(r);
+          if (seq === querySeq.current) setTraffic((prev) => keepIfUnchanged(prev, r));
         })
         .catch(() => {
           // Keep the last successful snapshot during transient refresh failures.
         });
-      if (!taskScoped) {
-        api
-          .trafficHosts()
-          .then((r) => {
-            if (alive) setHosts(r.hosts ?? []);
-          })
-          .catch(() => {
-            // Keep the last successful host list during transient refresh failures.
-          });
-      } else if (alive) {
-        setHosts([]);
+      if (taskScoped) {
+        setHosts((prev) => (prev.length === 0 ? prev : []));
+        return traffic;
       }
-    };
-    load();
-    const t = setInterval(() => {
-      if (page !== 0) return; // only auto-refresh the newest page
-      load();
-    }, 5000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
+      const hostList = api
+        .trafficHosts()
+        .then((r) => {
+          if (seq === querySeq.current) setHosts((prev) => keepIfUnchanged(prev, r.hosts ?? []));
+        })
+        .catch(() => {
+          // Keep the last successful host list during transient refresh failures.
+        });
+      return Promise.all([traffic, hostList]);
+    },
+    5000,
+    { enabled: page === 0, immediate: false },
+  );
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: every listed value starts a new query and reloadTick is an explicit manual-refetch trigger; the poll reads them itself.
+  React.useEffect(() => {
+    querySeq.current++;
+    void reload();
   }, [
     page,
     size,
@@ -290,6 +293,7 @@ export function TrafficHistory({ taskId }: { taskId?: string }) {
     reloadTick,
     taskId,
     taskScoped,
+    reload,
   ]);
 
   // Delete traffic for the current host filter (substring) or the checked

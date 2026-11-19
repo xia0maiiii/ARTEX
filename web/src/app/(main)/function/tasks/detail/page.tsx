@@ -522,10 +522,10 @@ function TaskDetailInner() {
           <TrafficHistory taskId={id} />
         </TabsContent>
         <TabsContent value="overview" className="mt-0">
-          <OverviewTab taskId={id} />
+          <OverviewTab key={id} taskId={id} />
         </TabsContent>
         <TabsContent value="graph" className="mt-0">
-          <GraphTab taskId={id} />
+          <GraphTab key={id} taskId={id} />
         </TabsContent>
         <TabsContent value="broadcast" className="mt-0">
           <BroadcastTab taskId={id} />

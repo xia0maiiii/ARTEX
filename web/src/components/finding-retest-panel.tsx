@@ -14,8 +14,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { usePoll } from "@/hooks/use-poll";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
+import { keepIfUnchanged } from "@/lib/poll";
 import type { FindingRetest } from "@/lib/types";
 
 const statusLabels = (ui: UITranslate) => ({
@@ -63,7 +65,7 @@ export function FindingRetestPanel({
         (item) => active(item) && rows.some((row) => row.id === item.id && !active(row)),
       );
       previousItems.current = rows;
-      setItems(rows);
+      setItems((prev) => keepIfUnchanged(prev, rows));
       setError("");
       if (completed) onCompleted?.();
     } catch (e) {
@@ -78,11 +80,8 @@ export function FindingRetestPanel({
     };
   }, [load]);
 
-  React.useEffect(() => {
-    if (error || !items?.some(active)) return;
-    const timer = setTimeout(() => void load(), 3000);
-    return () => clearTimeout(timer);
-  }, [error, items, load]);
+  // Poll only while a retest is still pending/running and the last load succeeded.
+  usePoll(load, 3000, { enabled: !error && !!items?.some(active), immediate: false });
 
   const running = items?.find(active);
 

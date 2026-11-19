@@ -94,6 +94,13 @@ function statusBg(code: number): string {
   return "bg-red-400";
 }
 
+// The readings SystemResourceStatus shows. Each response carries a per-request `timestamp`
+// and full-precision percentages, so comparing whole objects would never match.
+function shownMetrics(metrics: SystemMetrics): string {
+  if (!metrics.supported) return "unsupported";
+  return [metrics.cpu, metrics.memory, metrics.data_disk].map((value) => value.percent.toFixed(1)).join("|");
+}
+
 function SystemResourceStatus({ metrics }: { metrics: SystemMetrics | null }) {
   const { t: translate } = useLiveTranslation();
   if (!metrics) return null;
@@ -197,7 +204,9 @@ export default function DashboardPage() {
   // usePoll never overlaps calls, so a slow source no longer needs its own in-flight guard.
   usePoll(async () => {
     try {
-      setSystemMetrics(await api.systemMetrics());
+      const next = await api.systemMetrics();
+      // Keep the previous object while the strip would show the same numbers.
+      setSystemMetrics((prev) => (prev !== null && shownMetrics(prev) === shownMetrics(next) ? prev : next));
     } catch {
       /* retry on the next interval */
     }
@@ -214,7 +223,8 @@ export default function DashboardPage() {
     }
   }, 5000);
 
-  // The remaining fast sources stay batched so one poll causes a single render.
+  // The remaining fast sources stay batched so one poll causes a single render, and
+  // keepIfUnchanged makes that zero renders when nothing changed.
   usePoll(async () => {
     try {
       // Severity counts come from the stats endpoint and the list from a single
@@ -230,14 +240,14 @@ export default function DashboardPage() {
           api.tokenStats(),
           api.conversationTokens(),
         ]);
-      setFindingStats(findingCounts);
-      setRecentFindings(findingPage.items ?? []);
-      setStats(stats);
-      setSettings(settings);
-      setPending(pending);
-      setActivity(activity.items);
-      setTokens(tokens.total ?? null);
-      setConvTokens(conversationTokens);
+      setFindingStats((prev) => keepIfUnchanged(prev, findingCounts));
+      setRecentFindings((prev) => keepIfUnchanged(prev, findingPage.items ?? []));
+      setStats((prev) => keepIfUnchanged(prev, stats));
+      setSettings((prev) => keepIfUnchanged(prev, settings));
+      setPending((prev) => keepIfUnchanged(prev, pending));
+      setActivity((prev) => keepIfUnchanged(prev, activity.items));
+      setTokens((prev) => keepIfUnchanged(prev, tokens.total ?? null));
+      setConvTokens((prev) => keepIfUnchanged(prev, conversationTokens));
     } catch {
       // Preserve stale data and retry on the next interval.
     }
@@ -255,9 +265,9 @@ export default function DashboardPage() {
         api.usageStats(365),
         profilesLoaded.current ? null : api.llmProfiles(),
       ]);
-      setTraffic(traf.exchanges ?? []);
-      setAssetCounts(counts ?? {});
-      setUsageStats(usage);
+      setTraffic((prev) => keepIfUnchanged(prev, traf.exchanges ?? []));
+      setAssetCounts((prev) => keepIfUnchanged(prev, counts ?? {}));
+      setUsageStats((prev) => keepIfUnchanged(prev, usage));
       if (profileList) {
         profilesLoaded.current = true;
         setLLMProfiles(profileList);

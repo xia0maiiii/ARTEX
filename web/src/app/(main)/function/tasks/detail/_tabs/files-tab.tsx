@@ -21,8 +21,10 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { usePoll } from "@/hooks/use-poll";
 import { useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
+import { keepIfUnchanged } from "@/lib/poll";
 import type { Task, TaskFileEntry, TaskFileListing, WorkspaceFile } from "@/lib/types";
 
 function fileSize(n: number) {
@@ -71,8 +73,12 @@ export function FilesTab({ task, active }: { task: Task; active: boolean }) {
         }),
       ]);
       if (generation.current !== seq) return;
-      setSummary(all);
-      setListings(Object.fromEntries(dirs.filter((d) => d.result).map((d) => [d.path, d.result?.entries ?? []])));
+      // An unchanged tree keeps its previous objects, so the 5s refresh does not rebuild it.
+      setSummary((prev) => keepIfUnchanged(prev, all));
+      const nextListings = Object.fromEntries(
+        dirs.filter((d) => d.result).map((d) => [d.path, d.result?.entries ?? []]),
+      );
+      setListings((prev) => keepIfUnchanged(prev, nextListings));
       setError(dirs.some((d) => !d.result) ? liveUI("taskFiles.pathGone") : "");
     } catch (err) {
       if (generation.current === seq) setError(message(err));
@@ -89,13 +95,8 @@ export function FilesTab({ task, active }: { task: Task; active: boolean }) {
     };
   }, [active, refresh]);
 
-  React.useEffect(() => {
-    if (!active || task.status !== "running" || task.paused) return;
-    const timer = setInterval(() => {
-      if (document.visibilityState === "visible") void refresh();
-    }, 5000);
-    return () => clearInterval(timer);
-  }, [active, task.status, task.paused, refresh]);
+  // usePoll already pauses while the page is hidden.
+  usePoll(refresh, 5000, { enabled: active && task.status === "running" && !task.paused, immediate: false });
 
   const openPreview = React.useCallback(
     async (path: string) => {

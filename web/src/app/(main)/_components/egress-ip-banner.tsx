@@ -24,6 +24,12 @@ type EgressIpContextValue = {
 
 const EgressIpContext = React.createContext<EgressIpContextValue | null>(null);
 
+// latency_ms differs on every probe and nothing reading the context renders it, so it is
+// left out when deciding whether a probe changed the report.
+function reportShape(report: EgressReport | null): string {
+  return JSON.stringify(report, (key, value) => (key === "latency_ms" ? undefined : value));
+}
+
 export function EgressIpProvider({ children }: { children: React.ReactNode }) {
   const [enabled, setEnabledState] = React.useState(false);
   const [report, setReport] = React.useState<EgressReport | null>(null);
@@ -35,7 +41,7 @@ export function EgressIpProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(true);
     try {
       const nextReport = await api.testEgressProxy({ global_proxy: globalProxy });
-      setReport(nextReport);
+      setReport((prev) => (reportShape(prev) === reportShape(nextReport) ? prev : nextReport));
       return nextReport;
     } catch (cause) {
       setReport(null);

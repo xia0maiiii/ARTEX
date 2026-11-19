@@ -41,9 +41,11 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { usePoll } from "@/hooks/use-poll";
 import { useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
+import { keepIfUnchanged } from "@/lib/poll";
 import { SEVERITY_FILTER_OPTIONS, statusMeta } from "@/lib/status";
 import type {
   ActiveFindingRetest,
@@ -186,31 +188,32 @@ export default function FindingsPage() {
   const activeFilterFingerprint = React.useRef(filterFingerprint);
   activeFilterFingerprint.current = filterFingerprint;
 
-  // 一个轻量请求覆盖所有行/视图，避免逐行拉取完整复测历史；等待上一轮完成再轮询。
+  // 一个轻量请求覆盖所有行/视图，避免逐行拉取完整复测历史；usePoll 等待上一轮完成再轮询。
+  // failed：连续失败只提示一次；disposed：离开页面后才失败的请求不再弹提示。
+  const retestPoll = React.useRef({ failed: false, disposed: false });
   React.useEffect(() => {
-    let disposed = false;
-    let failed = false;
-    let timer: ReturnType<typeof setTimeout>;
-    async function refreshRetests() {
-      const version = retestRefreshVersion.current;
-      try {
-        const rows = await api.activeFindingRetests();
-        if (disposed || version !== retestRefreshVersion.current) return;
-        setActiveRetests(Object.fromEntries(rows.map((item) => [item.finding_id, item])));
-        failed = false;
-      } catch (error) {
-        if (!disposed && !failed) toast.error(liveUI("screen.34d011b1c81f43", { v0: (error as Error).message }));
-        failed = true;
-      } finally {
-        if (!disposed) timer = setTimeout(() => void refreshRetests(), 3000);
-      }
-    }
-    void refreshRetests();
+    const state = retestPoll.current;
+    state.disposed = false;
     return () => {
-      disposed = true;
-      clearTimeout(timer);
+      state.disposed = true;
     };
-  }, [liveUI]);
+  }, []);
+  usePoll(async () => {
+    const state = retestPoll.current;
+    const version = retestRefreshVersion.current;
+    try {
+      const rows = await api.activeFindingRetests();
+      if (state.disposed || version !== retestRefreshVersion.current) return;
+      const next = Object.fromEntries(rows.map((item) => [item.finding_id, item]));
+      setActiveRetests((current) => keepIfUnchanged(current, next));
+      state.failed = false;
+    } catch (error) {
+      if (!state.disposed && !state.failed) {
+        toast.error(liveUI("screen.34d011b1c81f43", { v0: (error as Error).message }));
+      }
+      state.failed = true;
+    }
+  }, 3000);
 
   React.useEffect(() => {
     const raw = getLocalStorageValue(FINDING_LIST_PREFERENCE_KEY);
@@ -379,13 +382,18 @@ export default function FindingsPage() {
         true,
       );
       if (request !== flatRequest.current || activeFilterFingerprint.current !== requestFilter) return;
-      setFlat({
-        caseRows: result.items,
-        items: result.items.flatMap((row) => (row.finding ? [row.finding] : [])),
+      // Unchanged rows keep their array references, so a 5s poll that brings back the same
+      // page does not re-render the list.
+      setFlat((current) => ({
+        caseRows: keepIfUnchanged(current.caseRows, result.items),
+        items: keepIfUnchanged(
+          current.items,
+          result.items.flatMap((row) => (row.finding ? [row.finding] : [])),
+        ),
         total: result.total,
         loaded: true,
         loading: false,
-      });
+      }));
     } catch {
       if (request !== flatRequest.current || activeFilterFingerprint.current !== requestFilter) return;
       // Polling keeps the last successful snapshot visible.
@@ -447,7 +455,7 @@ export default function FindingsPage() {
         ...dateRange,
       });
       if (request !== groupsRequest.current || activeFilterFingerprint.current !== requestFilter) return;
-      setGroups(result.items);
+      setGroups((current) => keepIfUnchanged(current, result.items));
       setGroupTotal(result.total);
       setTotal(result.finding_total);
     } catch {
@@ -492,8 +500,11 @@ export default function FindingsPage() {
         setGroupFindings((current) => ({
           ...current,
           [key]: {
-            caseRows: result.items,
-            items: result.items.flatMap((row) => (row.finding ? [row.finding] : [])),
+            caseRows: keepIfUnchanged(current[key]?.caseRows ?? [], result.items),
+            items: keepIfUnchanged(
+              current[key]?.items ?? [],
+              result.items.flatMap((row) => (row.finding ? [row.finding] : [])),
+            ),
             total: result.total,
             page: result.page,
             pageSize: result.page_size,
@@ -600,28 +611,33 @@ export default function FindingsPage() {
   }, [activeRetestFingerprint, loadAssetTree, preferencesHydrated, view]);
 
   // 只轮询当前视图:平铺视图刷当前页,分组视图刷组头与每个已展开的组(其分页彼此独立)。
-  // 资产视图只查一次(见下面的 return),它的左树是导航结构,没必要每 5 秒重算。
+  // 资产视图只查一次(不启用轮询),它的左树是导航结构,没必要每 5 秒重算。
   // 等偏好水合后再发首个请求,否则会先按默认视图/筛选白拉一次。
-  React.useEffect(() => {
-    if (!preferencesHydrated) return;
-    void activeRetestFingerprint; // 包括不定时轮询的资产视图，也在复测结束后刷新处置状态。
-    const refresh = () => {
+  // 返回本轮所有请求的 Promise,usePoll 等它们都结束才排下一轮。
+  const refreshView = usePoll(
+    () => {
       if (view === "flat" || view === "asset") {
-        if (!flatStateRef.current.loading) void loadFlat();
-        return;
+        return flatStateRef.current.loading ? undefined : loadFlat();
       }
-      void refreshGroups();
+      const loads = [refreshGroups()];
       for (const key of expandedGroupsRef.current) {
         if (!visibleGroupKeysRef.current.has(key)) continue;
         const state = groupFindingsRef.current[key];
-        if (state?.loaded && !state.loading) void loadGroup(key, state.page, state.pageSize);
+        if (state?.loaded && !state.loading) loads.push(loadGroup(key, state.page, state.pageSize));
       }
-    };
-    refresh();
-    if (view === "asset") return;
-    const timer = setInterval(refresh, 5000);
-    return () => clearInterval(timer);
-  }, [activeRetestFingerprint, loadFlat, loadGroup, preferencesHydrated, refreshGroups, view]);
+      return Promise.all(loads);
+    },
+    5000,
+    { enabled: preferencesHydrated && view !== "asset", immediate: false },
+  );
+
+  // 视图/筛选/分页(即 loadFlat 等回调)变化时立即刷新一次。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the loaders change with the view's filters and paging; refreshView runs the latest ones.
+  React.useEffect(() => {
+    if (!preferencesHydrated) return;
+    void activeRetestFingerprint; // 包括不定时轮询的资产视图，也在复测结束后刷新处置状态。
+    void refreshView();
+  }, [activeRetestFingerprint, loadFlat, loadGroup, preferencesHydrated, refreshGroups, view, refreshView]);
 
   React.useEffect(() => {
     const lastPage = Math.max(1, Math.ceil(groupTotal / pageSize));
@@ -648,7 +664,7 @@ export default function FindingsPage() {
     try {
       const result = await api.findingStats(statsQuery);
       if (request !== statsRequest.current || activeStatsFingerprint.current !== statsFingerprint) return;
-      setStats(result);
+      setStats((current) => keepIfUnchanged(current, result));
       setStatsLoaded(true);
     } catch {
       // Retain the previous snapshot during transient refresh failures.
@@ -656,16 +672,19 @@ export default function FindingsPage() {
   }, [statsQuery, statsFingerprint]);
 
   // Counts use the current filters and asset subtree, independently of pagination.
+  const pollStats = usePoll(refreshStats, 5000, { enabled: preferencesHydrated, immediate: false });
+
+  // Refresh right away when the filters (and so refreshStats) change; the cleanup drops a
+  // response for the previous filters.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshStats changes with the filters; pollStats runs the latest one.
   React.useEffect(() => {
     if (!preferencesHydrated) return;
     void activeRetestFingerprint;
-    void refreshStats();
-    const t = setInterval(() => void refreshStats(), 5000);
+    void pollStats();
     return () => {
       statsRequest.current++;
-      clearInterval(t);
     };
-  }, [preferencesHydrated, refreshStats, activeRetestFingerprint]);
+  }, [preferencesHydrated, refreshStats, activeRetestFingerprint, pollStats]);
 
   React.useEffect(() => {
     if (!statsLoaded) return;

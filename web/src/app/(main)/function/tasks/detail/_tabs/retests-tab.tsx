@@ -16,8 +16,10 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/in
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { usePoll } from "@/hooks/use-poll";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
+import { keepIfUnchanged } from "@/lib/poll";
 import { SEVERITY_FILTER_OPTIONS } from "@/lib/status";
 import type { Finding, FindingsPage, Severity } from "@/lib/types";
 
@@ -49,11 +51,12 @@ export function RetestsTab({ taskId }: { taskId: string }) {
   }, [severity, query]);
 
   // Only this task's own findings, including those without graph nodes.
-  // Fetch history only for the selection, and wait for each poll to finish.
-  React.useEffect(() => {
-    let disposed = false;
-    let timer: ReturnType<typeof setTimeout>;
-    async function load() {
+  // Fetch history only for the selection; usePoll waits for each poll to finish.
+  // querySeq numbers the current query, so a response for a previous one is dropped.
+  const querySeq = React.useRef(0);
+  const reload = usePoll(
+    async () => {
+      const seq = querySeq.current;
       try {
         const result = await api.findingsPage({
           task: taskId,
@@ -63,30 +66,33 @@ export function RetestsTab({ taskId }: { taskId: string }) {
           query: query || undefined,
           sort: "severity",
         });
-        if (disposed) return;
+        if (seq !== querySeq.current) return;
         const lastPage = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
         if (page > lastPage) {
           setPage(lastPage);
           return;
         }
-        setData({ ...result, taskId, severity, query });
+        const next = { ...result, taskId, severity, query };
+        setData((prev) => keepIfUnchanged(prev, next));
         setSelectedId((current) =>
           result.items.some((finding) => finding.id === current) ? current : (result.items[0]?.id ?? ""),
         );
         setError("");
       } catch (e) {
-        if (!disposed) setError((e as Error).message);
-      } finally {
-        if (!disposed) timer = setTimeout(() => void load(), 3000);
+        if (seq === querySeq.current) setError((e as Error).message);
       }
-    }
-    void refreshVersion; // Refresh triage immediately after a retest completes.
-    void load();
-    return () => {
-      disposed = true;
-      clearTimeout(timer);
-    };
-  }, [taskId, page, refreshVersion, severity, query]);
+    },
+    3000,
+    { immediate: false },
+  );
+
+  // A new page / filter loads right away, and so does refreshVersion: refresh triage
+  // immediately after a retest completes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each listed value starts a new query; the poll reads them itself.
+  React.useEffect(() => {
+    querySeq.current++;
+    void reload();
+  }, [taskId, page, refreshVersion, severity, query, reload]);
 
   const loaded = data?.page === page && data.taskId === taskId && data.severity === severity && data.query === query;
   const findings = loaded ? data.items : [];

@@ -20,9 +20,11 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { usePoll } from "@/hooks/use-poll";
 import { localizedError } from "@/i18n/errors";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
+import { keepIfUnchanged } from "@/lib/poll";
 import { statusMeta } from "@/lib/status";
 import type { IntelligenceKind, IntelligencePage, TaskIntelligence } from "@/lib/types";
 import { copyText } from "@/lib/utils";
@@ -115,38 +117,33 @@ export function IntelligencePanel({
     }, 300);
     return () => clearTimeout(timer);
   }, [search]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh explicitly reloads this resource after a user action.
-  React.useEffect(() => {
-    let alive = true;
-    let busy = false;
-    const load = async () => {
-      if (busy) return;
-      busy = true;
+  // usePoll never overlaps loads and pauses while the page is hidden. querySeq drops a
+  // response for a previous scope / filter / page; an unchanged page keeps the previous object.
+  const querySeq = React.useRef(0);
+  const reload = usePoll(
+    async () => {
+      const seq = querySeq.current;
       try {
         const params = new URLSearchParams({ limit: "25", offset: String(page * 25) });
         if (kind !== "all") params.set("kind", kind);
         if (status !== "all") params.set("status", status);
         if (query) params.set("q", query);
         const result = await api.intelligence(scope, scopeId, params);
-        if (alive) {
-          setData(result);
-          setError(null);
-        }
+        if (seq !== querySeq.current) return;
+        setData((prev) => keepIfUnchanged(prev, result));
+        setError(null);
       } catch (e) {
-        if (alive) setError(e as Error);
-      } finally {
-        busy = false;
+        if (seq === querySeq.current) setError(e as Error);
       }
-    };
-    void load();
-    const timer = setInterval(() => {
-      if (!document.hidden) void load();
-    }, 8000);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, [scope, scopeId, kind, status, query, page, refresh]);
+    },
+    8000,
+    { immediate: false },
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh explicitly reloads this resource after a user action; the other values start a new query.
+  React.useEffect(() => {
+    querySeq.current++;
+    void reload();
+  }, [scope, scopeId, kind, status, query, page, refresh, reload]);
   const open = (item: TaskIntelligence) => setSelected(item);
   const close = () => setSelected(null);
   const navigate = () => {

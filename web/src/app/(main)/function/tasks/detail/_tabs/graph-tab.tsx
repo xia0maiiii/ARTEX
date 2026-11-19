@@ -4,6 +4,7 @@ import * as React from "react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { ExplorationGraph } from "@/components/exploration-graph";
+import { usePoll } from "@/hooks/use-poll";
 import { api } from "@/lib/api";
 import type { Edge, TaskNode } from "@/lib/types";
 
@@ -14,14 +15,12 @@ export function GraphTab({ taskId }: { taskId: string }) {
   // 才不会被 20s 轮询打断而顿挫)。只取影响渲染的字段。
   const sigRef = React.useRef("");
 
-  React.useEffect(() => {
-    let cancelled = false;
-    sigRef.current = ""; // 换任务:强制下一次刷新
-    const load = () => {
+  // 详情页以 key={taskId} 挂载本标签,taskId 在实例内固定,换任务即重新挂载。
+  usePoll(
+    () =>
       api
         .explorationGraph(taskId)
         .then((g) => {
-          if (cancelled) return;
           const ns = g.nodes ?? [];
           const es = g.edges ?? [];
           const sig = JSON.stringify([
@@ -35,15 +34,9 @@ export function GraphTab({ taskId }: { taskId: string }) {
         })
         .catch(() => {
           /* keep last good data */
-        });
-    };
-    load();
-    const timer = setInterval(load, 20000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [taskId]);
+        }),
+    20000,
+  );
 
   return (
     <Card>

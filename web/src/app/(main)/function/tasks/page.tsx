@@ -130,7 +130,7 @@ import { taskError } from "@/i18n/task-runtime";
 import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { api, type ScheduleInput } from "@/lib/api";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
-import { keepIfUnchanged } from "@/lib/poll";
+import { keepIfUnchanged, keepUnchangedItems } from "@/lib/poll";
 import { type SortDirection, useStoredSortPreference } from "@/lib/sort-preference";
 import type {
   AssetInterceptRuleInput,
@@ -526,25 +526,25 @@ export default function TasksPage() {
     [pageIds],
   );
 
-  // lastRef holds the previous poll's serialized payload: the list is re-fetched every
-  // POLL_MS but usually comes back unchanged, and setTasks on an identical payload would
-  // re-render the whole page for nothing. Bail out when it matches.
-  const lastRef = React.useRef<string>("");
-
-  const load = React.useCallback(() => {
-    api
-      .tasks()
-      .then((r) => {
-        const next = r.tasks.map((t) => (t.id === r.active ? { ...t, active: true } : t));
-        const sig = JSON.stringify(next);
-        if (sig === lastRef.current) return;
-        lastRef.current = sig;
-        setTasks(next);
-      })
-      .catch(() => {
-        // Polling is best-effort; the next interval retries automatically.
-      });
-  }, []);
+  // The list is re-fetched every POLL_MS but usually comes back unchanged. Comparing with
+  // the current state (not a cached payload) keeps unchanged rows — and the array itself
+  // when nothing moved — by reference, so memoized TaskRows only re-render when their own
+  // task changed, and a reload right after an optimistic local edit is never deduped away.
+  const refreshTasks = usePoll(
+    () =>
+      api
+        .tasks()
+        .then((r) => {
+          const next = r.tasks.map((t) => (t.id === r.active ? { ...t, active: true } : t));
+          setTasks((prev) => keepUnchangedItems(prev, next, (task) => task.id));
+        })
+        .catch(() => {
+          // Polling is best-effort; the next interval retries automatically.
+        }),
+    POLL_MS,
+  );
+  // Reload after an action; queued behind a poll already in flight so it sees the change.
+  const load = React.useCallback(() => void refreshTasks(), [refreshTasks]);
 
   const loadCategories = React.useCallback(() => {
     api
@@ -559,14 +559,10 @@ export default function TasksPage() {
   }, []);
 
   React.useEffect(() => {
-    load();
     loadCategories();
-    const i = setInterval(load, POLL_MS);
-    return () => clearInterval(i);
-  }, [load, loadCategories]);
+  }, [loadCategories]);
 
   const refreshCategoriesAndTasks = React.useCallback(() => {
-    lastRef.current = "";
     loadCategories();
     load();
   }, [load, loadCategories]);
@@ -583,7 +579,6 @@ export default function TasksPage() {
               }
             : task,
         );
-        lastRef.current = JSON.stringify(next);
         return next;
       });
       loadCategories();
@@ -630,8 +625,7 @@ export default function TasksPage() {
   );
 
   // controlTask 是行内暂停/继续:批量走 controlTasksBatch,单行走单任务接口,省去
-  // 「先勾选再点批量」。清空 lastRef 让下一次轮询即使负载相同也照单接收,否则状态
-  // 回写会被去重挡掉、按钮看起来没反应。
+  // 「先勾选再点批量」。
   const controlTask = React.useCallback(
     async (id: string, action: "pause" | "resume") => {
       try {
@@ -650,7 +644,6 @@ export default function TasksPage() {
         );
       } finally {
         // 无论成败都刷新:失败多半是状态已变化,重新拉取才能让按钮回到正确形态。
-        lastRef.current = "";
         load();
       }
     },
@@ -663,7 +656,6 @@ export default function TasksPage() {
       setTasks((current) =>
         current.map((entry) => (entry.id === task.id ? { ...entry, remark: updated.remark } : entry)),
       );
-      lastRef.current = "";
       load();
     },
     [load],
@@ -674,7 +666,6 @@ export default function TasksPage() {
       try {
         await api.renameTask(task.id, name);
         toast.success(liveT("taskUI.taskRenamed", { id: task.id }));
-        lastRef.current = "";
         load();
       } catch (error) {
         toast.error(liveT("taskUI.renameFailed", { message: taskError(error, liveT) }));
@@ -692,7 +683,6 @@ export default function TasksPage() {
         toast.success(
           pinned ? liveT("taskUI.taskUnpinned", { id: task.id }) : liveT("taskUI.taskPinned", { id: task.id }),
         );
-        lastRef.current = "";
         load();
       } catch (error) {
         toast.error(
@@ -720,7 +710,6 @@ export default function TasksPage() {
           ),
         );
         toast.success(liveT(enabled ? "taskUI.globalAssetsDisabled" : "taskUI.globalAssetsEnabled", { id: task.id }));
-        lastRef.current = "";
         load();
       } catch (error) {
         toast.error(liveT("taskUI.settingFailed", { message: taskError(error, liveT) }));
@@ -735,7 +724,6 @@ export default function TasksPage() {
         await api.archiveTask(task.id);
         toast.success(liveT("taskUI.taskArchiveQueued", { id: task.id }));
         setActiveTab("archived");
-        lastRef.current = "";
         load();
       } catch (error) {
         toast.error(liveT("taskUI.archiveError", { message: taskError(error, liveT) }));
@@ -850,7 +838,6 @@ export default function TasksPage() {
     }
     setSelectedIds(new Set());
     setActiveTab("archived");
-    lastRef.current = "";
     load();
   }, [archivableTaskIDs, load, liveT]);
 
@@ -891,7 +878,6 @@ export default function TasksPage() {
             }),
           );
         }
-        lastRef.current = "";
         load();
       } catch (error) {
         toast.error(

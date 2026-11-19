@@ -29,9 +29,11 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { usePoll } from "@/hooks/use-poll";
 import { useSideQuestions } from "@/hooks/use-side-questions";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
+import { keepIfUnchanged, keepUnchangedItems } from "@/lib/poll";
 import type {
   InterceptApprovalFilter,
   InterceptApprovalRow,
@@ -939,15 +941,17 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
           api.interceptPending(),
         ]);
         if (id !== request.current) return;
+        // Unchanged polls keep the previous arrays (and history rows) so the 5s refresh
+        // does not re-render the table.
         if (history.status === "fulfilled") {
-          setRows(history.value.items);
+          setRows((prev) => keepUnchangedItems(prev, history.value.items, (row) => row.id));
           setTotal(history.value.total);
           setError("");
         } else {
           setError((history.reason as Error).message || liveUI("screen.d1d044826a45ef"));
         }
         if (pending.status === "fulfilled") {
-          setPendingRows(pending.value);
+          setPendingRows((prev) => keepIfUnchanged(prev, pending.value));
           setPendingError("");
         } else {
           setPendingError((pending.reason as Error).message || liveUI("screen.d1d044826a45ef"));
@@ -967,14 +971,17 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
   const latestLoad = React.useRef(load);
   latestLoad.current = load;
 
+  const pollLoad = usePoll(() => load(), 5000, { immediate: false });
+
+  // Load right away whenever the scope, page or filter (and so `load`) changes; the cleanup
+  // drops a response for the previous one.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `load` changes with the page and filter; pollLoad runs the latest one.
   React.useEffect(() => {
-    void load();
-    const timer = setInterval(() => void load(), 5000);
+    void pollLoad();
     return () => {
       request.current++;
-      clearInterval(timer);
     };
-  }, [load]);
+  }, [load, pollLoad]);
 
   const changePageSize = (next: number) => {
     setPageSize(next);

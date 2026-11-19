@@ -611,36 +611,26 @@ function ChatView({
     if (conv.running) setRunning(true);
   }, [conv.running]);
 
-  // poll while a turn is running: pull new steps after the cursor.
-  React.useEffect(() => {
-    if (!running) return;
-    let live = true;
-    let timer: ReturnType<typeof setTimeout>;
-    const tick = async () => {
-      let keepPolling = true;
+  // poll while a turn is running: pull new steps after the cursor. ChatView is keyed by
+  // conversation id, so conv.id is fixed here; a response with running=false clears
+  // `running`, which stops the loop. usePoll never overlaps two polls with the same cursor.
+  usePoll(
+    async () => {
       try {
         const r = await api.conversationMessages(conv.id, cursorRef.current);
-        if (!live) return;
         if (r.items.length) {
           setMessages((prev) => mergeActivities(prev, r.items));
         }
         cursorRef.current = Math.max(cursorRef.current, r.cursor);
-        keepPolling = r.running;
         setRunning(r.running);
         if (!r.running) onTitleMaybeChanged(); // first-turn auto-title landed
       } catch {
         /* transient — keep polling */
-      } finally {
-        // Slow responses must not overlap another poll with the same cursor.
-        if (live && keepPolling) timer = setTimeout(() => void tick(), 1000);
       }
-    };
-    void tick();
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
-  }, [running, conv.id, onTitleMaybeChanged]);
+    },
+    1000,
+    { enabled: running },
+  );
 
   const loadFocusPage = React.useCallback(
     (before: number) => api.conversationHistory(conv.id, before, HISTORY_PAGE),

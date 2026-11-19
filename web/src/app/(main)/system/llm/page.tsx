@@ -25,8 +25,10 @@ import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { usePoll } from "@/hooks/use-poll";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
+import { keepIfUnchanged } from "@/lib/poll";
 import type { LLMPoolMember, LLMPoolStatus, LLMProfile, LLMRetryOverride } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -121,11 +123,8 @@ function PoolSheet({
   const [busy, setBusy] = React.useState(false);
 
   // 冷却倒计时是后端算出的剩余秒数——抽屉开着且有配置不正常时才定时拉，让它走起来。
-  React.useEffect(() => {
-    if (!open || !pool?.enabled || !pool.chain.some((m) => m.state !== "ok")) return;
-    const t = setInterval(() => void onReload(), 10_000);
-    return () => clearInterval(t);
-  }, [open, pool, onReload]);
+  const degraded = !!pool?.enabled && pool.chain.some((m) => m.state !== "ok");
+  usePoll(onReload, 10_000, { enabled: open && degraded, immediate: false });
 
   async function toggle(patch: { llm_pool_enabled?: boolean; llm_pool_bind_fallback?: boolean }) {
     if (busy) return;
@@ -805,7 +804,8 @@ export default function LLMPage() {
 
   const loadPool = React.useCallback(async () => {
     try {
-      setPool(await api.llmPool());
+      const next = await api.llmPool();
+      setPool((prev) => keepIfUnchanged(prev, next));
     } catch {
       /* ignore */
     }

@@ -4,7 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { toast } from "sonner";
 
+import { usePoll } from "@/hooks/use-poll";
 import { openSSE } from "@/lib/api";
+import { keepIfUnchanged, keepUnchangedItems } from "@/lib/poll";
 import { isBtwCommand, type SideExchange, type SideHistory, sideAPI } from "@/lib/side-questions";
 
 // crypto.randomUUID 仅在安全上下文可用(https/localhost);经 IP+http 访问时降级。
@@ -62,9 +64,11 @@ export function useSideQuestions(parent: string | null) {
       try {
         const data = await sideAPI.history(parent, before);
         if (version !== epoch.current) return;
-        setItems((old) => merge(old, data.items));
+        // An unchanged history keeps the previous array (and rows) so the 2s poll does not
+        // re-render the side panel.
+        setItems((old) => keepUnchangedItems(old, merge(old, data.items), (item) => item.id));
         restoreFailedDraft(data.items);
-        setSnapshot(data.snapshot);
+        setSnapshot((old) => keepIfUnchanged(old, data.snapshot));
         setSnapshotError(data.snapshot_error ?? "");
         setLoadError("");
         if (before || !cursor.current) {
@@ -121,12 +125,9 @@ export function useSideQuestions(parent: string | null) {
     };
   }, [parent]);
 
-  useEffect(() => {
-    if (!open || !parent) return;
-    void load();
-    const timer = setInterval(() => void load(), 2000);
-    return () => clearInterval(timer);
-  }, [open, parent, load]);
+  // A parent switch while open keeps polling: the effect above reloads the new parent
+  // right away and the epoch check drops responses for the old one.
+  usePoll(() => load(), 2000, { enabled: open && !!parent });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: Reconnect after a clear attempt invalidates older callbacks.
   useEffect(() => {

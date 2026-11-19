@@ -26,8 +26,10 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
+import { usePoll } from "@/hooks/use-poll";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
+import { keepIfUnchanged } from "@/lib/poll";
 import type {
   AssetInterceptKind,
   AssetInterceptRule,
@@ -151,7 +153,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
   const loadTokens = React.useCallback(async () => {
     try {
       const resp = await api.tokensByModel(taskId);
-      setModelTokens(resp.models);
+      setModelTokens((prev) => keepIfUnchanged(prev, resp.models));
     } catch {
       // 忽略：无 PG 时接口报错，卡片自然为空
     }
@@ -169,7 +171,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
   const loadGoals = React.useCallback(async () => {
     try {
       const resp = await api.taskGoals(taskId);
-      setGoals(resp.goals);
+      setGoals((prev) => keepIfUnchanged(prev, resp.goals));
     } catch {
       // 忽略：瞬时错误，下次轮询重试
     }
@@ -232,7 +234,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
   const loadConstraints = React.useCallback(async () => {
     try {
       const resp = await api.taskConstraints(taskId);
-      setConstraints(resp.constraints);
+      setConstraints((prev) => keepIfUnchanged(prev, resp.constraints));
     } catch {
       // 忽略：瞬时错误，下次轮询重试
     }
@@ -350,70 +352,51 @@ export function OverviewTab({ taskId }: { taskId: string }) {
     }
   };
 
+  // Mounted with key={taskId} by the detail page, so taskId is fixed for an instance.
+  // Every polled value goes through keepIfUnchanged, so an idle task re-renders nothing.
+  const loadSnapshot = async () => {
+    try {
+      const [taskResp, statsResp, intentsResp, findingsResp] = await Promise.all([
+        api.task(taskId),
+        api.stats(taskId),
+        api.intents(taskId),
+        api.findings(taskId),
+      ]);
+      const activeTask = statsResp.active_task;
+      const nextTask = activeTask
+        ? {
+            ...taskResp,
+            in_flight: activeTask.in_flight,
+            goals_total: activeTask.goals_total,
+            goals_met: activeTask.goals_met,
+            engine_mode: statsResp.engine_mode ?? activeTask.engine_mode,
+            paused: activeTask.paused,
+          }
+        : taskResp;
+      setTask((prev) => keepIfUnchanged(prev, nextTask));
+      setStats((prev) => keepIfUnchanged(prev, statsResp));
+      setIntents((prev) => keepIfUnchanged(prev, intentsResp));
+      setFindings((prev) => keepIfUnchanged(prev, findingsResp));
+    } catch {
+      // transient errors are ignored; the next poll will retry
+      return;
+    }
+    // coverage is independent + may 503 when no asset store — fetch separately so
+    // its failure never blocks the others.
+    try {
+      const c = await api.taskCoverage(taskId);
+      setCoverage((prev) => keepIfUnchanged(prev, c));
+    } catch {
+      // A transient coverage failure is retried by the next poll.
+    }
+  };
+
   React.useEffect(() => {
-    let cancelled = false;
-    let loading = false;
-
-    const load = async () => {
-      if (loading) return;
-      loading = true;
-      try {
-        const [taskResp, statsResp, intentsResp, findingsResp] = await Promise.all([
-          api.task(taskId),
-          api.stats(taskId),
-          api.intents(taskId),
-          api.findings(taskId),
-        ]);
-        if (cancelled) return;
-        const activeTask = statsResp.active_task;
-        setTask(
-          activeTask
-            ? {
-                ...taskResp,
-                in_flight: activeTask.in_flight,
-                goals_total: activeTask.goals_total,
-                goals_met: activeTask.goals_met,
-                engine_mode: statsResp.engine_mode ?? activeTask.engine_mode,
-                paused: activeTask.paused,
-              }
-            : taskResp,
-        );
-        setStats(statsResp);
-        setIntents(intentsResp);
-        setFindings(findingsResp);
-        // coverage is independent + may 503 when no asset store — fetch separately so
-        // its failure never blocks the others.
-        api
-          .taskCoverage(taskId)
-          .then((c) => {
-            if (!cancelled) setCoverage(c);
-          })
-          .catch(() => {
-            // A transient coverage failure is retried by the next poll.
-          });
-      } catch {
-        // transient errors are ignored; the next poll will retry
-      } finally {
-        loading = false;
-      }
-    };
-
-    void load();
     void loadScope();
-    void loadTokens();
-    void loadGoals();
-    void loadConstraints();
-    const timer = setInterval(() => {
-      void load();
-      void loadTokens();
-      void loadGoals();
-      void loadConstraints();
-    }, 3000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [taskId, loadScope, loadTokens, loadGoals, loadConstraints]);
+  }, [loadScope]);
+
+  // usePoll waits for the whole batch, so a slow source no longer needs an in-flight guard.
+  usePoll(() => Promise.all([loadSnapshot(), loadTokens(), loadGoals(), loadConstraints()]), 3000);
 
   const running = intents.filter((i) => i.state === "running");
   const open = intents.filter((i) => i.state === "open");

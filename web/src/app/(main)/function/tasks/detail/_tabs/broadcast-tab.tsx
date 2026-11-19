@@ -27,8 +27,10 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { usePoll } from "@/hooks/use-poll";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
+import { keepIfUnchanged } from "@/lib/poll";
 import { type Tone, toneClasses, toneDot } from "@/lib/status";
 import { taskAssetTypeLabel } from "@/lib/task-assets";
 import type { Edge, ExploreKind, FindingAsset, NewAssetType, TaskNode } from "@/lib/types";
@@ -511,35 +513,32 @@ export function BroadcastTab({ taskId }: { taskId: string }) {
     return () => clearTimeout(t);
   }, [queryInput]);
 
-  React.useEffect(() => {
-    let alive = true;
-    let rendered = false; // 本次查询是否已经把内容渲染出来过
-    // 换任务/筛选/排序 = 换了一条播报流:清掉「新」标记和未读基线。翻页不算换流,
-    // 否则回到最新时就没有未读计数可算了。
-    const stream = `${taskId}|${kinds.join(",")}|${query}|${order}`;
-    if (streamRef.current !== stream) {
-      streamRef.current = stream;
-      seenRef.current = new Set();
-      baselineRef.current = null;
-      setPending(0);
-    }
-    const load = () =>
-      api
+  // 当前这次查询(任务/筛选/排序/翻页/直播开关任一变化即换一次);rendered = 本次查询
+  // 是否已经把内容渲染出来过。响应回来时若查询已被替换就丢弃。
+  const queryRunRef = React.useRef({ rendered: false });
+
+  // 未变化的轮询结果保留原引用(keepIfUnchanged),直播位静止时不触发重渲染。
+  const refreshNodes = usePoll(
+    () => {
+      const run = queryRunRef.current;
+      return api
         .explorationNodes(taskId, { page, size, kinds, q: query, order })
         .then((r) => {
-          if (!alive) return;
+          if (queryRunRef.current !== run) return;
           // 直播位每轮都刷新;其它位置只渲染第一次,之后轮询仅更新未读计数。
-          if (atLive || !rendered) {
-            rendered = true;
-            setItems(r.items);
-            setEdges(r.edges);
-            setRefs(r.refs);
-            setAssets(r.assets);
+          if (atLive || !run.rendered) {
+            run.rendered = true;
+            setItems((prev) => keepIfUnchanged(prev, r.items));
+            setEdges((prev) => keepIfUnchanged(prev, r.edges));
+            setRefs((prev) => keepIfUnchanged(prev, r.refs));
+            setAssets((prev) => keepIfUnchanged(prev, r.assets));
           }
           setTotal(r.total);
           if (atLive) {
             const seen = seenRef.current;
-            setFreshIDs(seen.size === 0 ? new Set() : new Set(r.items.filter((n) => !seen.has(n.id)).map((n) => n.id)));
+            const fresh: Set<string> =
+              seen.size === 0 ? new Set() : new Set(r.items.filter((n) => !seen.has(n.id)).map((n) => n.id));
+            setFreshIDs((prev) => (prev.size === fresh.size && [...fresh].every((id) => prev.has(id)) ? prev : fresh));
             seenRef.current = new Set(r.items.map((n) => n.id));
             baselineRef.current = r.total;
             setPending(0);
@@ -552,18 +551,26 @@ export function BroadcastTab({ taskId }: { taskId: string }) {
         .catch(() => {
           // 轮询是尽力而为:保留上一次成功的播报内容,下一轮自动重试。
         });
-    void load();
-    if (!live) {
-      return () => {
-        alive = false;
-      };
+    },
+    POLL_MS,
+    { enabled: live, immediate: false },
+  );
+
+  // 每次查询变化立即拉一次;直播关闭时只拉这一次,不再轮询。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: every listed control starts a new query; the poll reads them itself.
+  React.useEffect(() => {
+    // 换任务/筛选/排序 = 换了一条播报流:清掉「新」标记和未读基线。翻页不算换流,
+    // 否则回到最新时就没有未读计数可算了。
+    const stream = `${taskId}|${kinds.join(",")}|${query}|${order}`;
+    if (streamRef.current !== stream) {
+      streamRef.current = stream;
+      seenRef.current = new Set();
+      baselineRef.current = null;
+      setPending(0);
     }
-    const timer = setInterval(load, POLL_MS);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, [taskId, page, size, kinds, query, order, live, atLive]);
+    queryRunRef.current = { rendered: false };
+    void refreshNodes();
+  }, [taskId, page, size, kinds, query, order, live, atLive, refreshNodes]);
 
   const toggleKind = (kind: ExploreKind) => {
     setKinds((cur) => (cur.includes(kind) ? cur.filter((k) => k !== kind) : [...cur, kind]));

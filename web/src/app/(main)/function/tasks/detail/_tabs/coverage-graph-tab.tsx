@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { usePoll } from "@/hooks/use-poll";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import type { CoverageAssetRef, CoverageAssetRefs, CoverageGraphEdge, CoverageGraphNode } from "@/lib/types";
@@ -782,13 +783,17 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
     }
   }, [taskId]);
 
-  React.useEffect(() => {
-    if (!mappingConversationId) return;
-    let cancelled = false;
-    const poll = async () => {
+  // Poll the mapping conversation until it stops running (which clears the id and so
+  // disables the loop). The ref drops a response for a conversation that was replaced
+  // while the request was in flight.
+  const mappingConversationRef = React.useRef(mappingConversationId);
+  const refreshMapping = usePoll(
+    async () => {
+      const conversationId = mappingConversationId;
+      if (!conversationId) return;
       try {
-        const state = await api.conversationMessages(mappingConversationId, 0);
-        if (cancelled) return;
+        const state = await api.conversationMessages(conversationId, 0);
+        if (mappingConversationRef.current !== conversationId) return;
         if (!state.running) {
           setMapping(false);
           setMappingConversationId(null);
@@ -799,14 +804,16 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
       } catch {
         // Keep the spinner while the conversation endpoint is temporarily unavailable.
       }
-    };
-    void poll();
-    const timer = window.setInterval(() => void poll(), 2000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [mappingConversationId]);
+    },
+    2000,
+    { enabled: Boolean(mappingConversationId), immediate: false },
+  );
+
+  // Check a newly tracked conversation right away instead of waiting a tick.
+  React.useEffect(() => {
+    mappingConversationRef.current = mappingConversationId;
+    if (mappingConversationId) void refreshMapping();
+  }, [mappingConversationId, refreshMapping]);
 
   React.useEffect(() => {
     fetchGraph();
