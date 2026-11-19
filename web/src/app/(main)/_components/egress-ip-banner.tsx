@@ -6,6 +6,7 @@ import type { TFunction } from "i18next";
 import { Globe2Icon, Loader2Icon, RefreshCwIcon, XIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { usePoll } from "@/hooks/use-poll";
 import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { api } from "@/lib/api";
 import type { EgressCheck, EgressReport } from "@/lib/types";
@@ -63,16 +64,16 @@ export function EgressIpProvider({ children }: { children: React.ReactNode }) {
     };
   }, [probeForProxy]);
 
-  React.useEffect(() => {
-    if (!enabled) return;
-    const timer = window.setInterval(() => {
-      void api
+  // The initial probe happens above / in setEnabled, so the loop starts one interval later.
+  usePoll(
+    () =>
+      api
         .settings()
         .then((settings) => probeForProxy(settings.global_proxy ?? ""))
-        .catch(() => undefined);
-    }, 10000);
-    return () => window.clearInterval(timer);
-  }, [enabled, probeForProxy]);
+        .catch(() => undefined),
+    10000,
+    { enabled, immediate: false },
+  );
 
   const setEnabled = React.useCallback(
     async (nextEnabled: boolean) => {

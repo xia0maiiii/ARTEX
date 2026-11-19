@@ -125,10 +125,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { usePoll } from "@/hooks/use-poll";
 import { taskError } from "@/i18n/task-runtime";
 import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { api, type ScheduleInput } from "@/lib/api";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
+import { keepIfUnchanged } from "@/lib/poll";
 import { type SortDirection, useStoredSortPreference } from "@/lib/sort-preference";
 import type {
   AssetInterceptRuleInput,
@@ -2089,11 +2091,12 @@ function TaskArchivesPanel({ onChanged }: { onChanged: () => void }) {
         q: query.trim(),
         state: stateFilter === "all" ? undefined : stateFilter,
       });
-      setArchives(result.items);
+      setArchives((prev) => keepIfUnchanged(prev, result.items));
       setTotal(result.total);
       setSelected((current) => {
         const visible = new Set(result.items.map((archive) => archive.id));
-        return new Set([...current].filter((id) => visible.has(id)));
+        const next = new Set([...current].filter((id) => visible.has(id)));
+        return next.size === current.size ? current : next;
       });
       const pending = [...pendingRestoreIDs.current];
       if (pending.length > 0) {
@@ -2114,11 +2117,16 @@ function TaskArchivesPanel({ onChanged }: { onChanged: () => void }) {
     }
   }, [onChanged, page, pageSize, query, stateFilter, liveT]);
 
+  // Only archives that are still moving (queued/archiving/restoring/deleting) need the
+  // 2s refresh; a settled list is static until the user acts, which reloads it below.
+  const hasProcessing = archives.some((archive) => ARCHIVE_PROCESSING_STATES.has(archive.state));
+  const refreshArchives = usePoll(load, 2_000, { enabled: hasProcessing, immediate: false });
+
+  // First load, and reload whenever paging/filters (and therefore `load`) change.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `load` changes with the filters; refreshArchives runs the latest one.
   React.useEffect(() => {
-    void load();
-    const timer = setInterval(() => void load(), 2_000);
-    return () => clearInterval(timer);
-  }, [load]);
+    void refreshArchives();
+  }, [load, refreshArchives]);
 
   const selectable = React.useMemo(
     () => archives.filter((archive) => !ARCHIVE_PROCESSING_STATES.has(archive.state)),
@@ -2139,9 +2147,9 @@ function TaskArchivesPanel({ onChanged }: { onChanged: () => void }) {
 
   const afterAction = React.useCallback(() => {
     setSelected(new Set());
-    void load();
+    void refreshArchives();
     onChanged();
-  }, [load, onChanged]);
+  }, [refreshArchives, onChanged]);
 
   async function restoreMany(items: TaskArchive[]) {
     try {

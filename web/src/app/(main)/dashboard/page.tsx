@@ -25,8 +25,10 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Progress } from "@/components/ui/progress";
+import { usePoll } from "@/hooks/use-poll";
 import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { api } from "@/lib/api";
+import { keepIfUnchanged } from "@/lib/poll";
 import type {
   Activity,
   ConvTokenSummary,
@@ -192,132 +194,78 @@ export default function DashboardPage() {
   const [llmProfiles, setLLMProfiles] = React.useState<LLMProfile[]>([]);
   const [systemMetrics, setSystemMetrics] = React.useState<SystemMetrics | null>(null);
 
-  React.useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const next = await api.systemMetrics();
-        if (alive) setSystemMetrics(next);
-      } catch {
-        /* retry on the next interval */
-      }
-    };
-    void load();
-    const timer = setInterval(load, 5000);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, []);
+  // usePoll never overlaps calls, so a slow source no longer needs its own in-flight guard.
+  usePoll(async () => {
+    try {
+      setSystemMetrics(await api.systemMetrics());
+    } catch {
+      /* retry on the next interval */
+    }
+  }, 5000);
 
   // The task list is the most expensive dashboard source. Poll it independently
   // so a large history cannot hold back every other dashboard panel.
-  React.useEffect(() => {
-    let alive = true;
-    let loading = false;
-    let signature = "";
-    const load = async () => {
-      if (loading) return;
-      loading = true;
-      try {
-        const tr = await api.tasks();
-        if (!alive) return;
-        const nextSignature = JSON.stringify(tr.tasks);
-        if (nextSignature !== signature) {
-          signature = nextSignature;
-          setTasks(tr.tasks);
-        }
-      } catch {
-        /* transient errors — next poll retries */
-      } finally {
-        loading = false;
-      }
-    };
-    void load();
-    const t = setInterval(load, 5000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, []);
+  usePoll(async () => {
+    try {
+      const tr = await api.tasks();
+      setTasks((prev) => keepIfUnchanged(prev, tr.tasks));
+    } catch {
+      /* transient errors — next poll retries */
+    }
+  }, 5000);
 
   // The remaining fast sources stay batched so one poll causes a single render.
-  React.useEffect(() => {
-    let alive = true;
-    let loading = false;
-    const load = async () => {
-      if (loading) return;
-      loading = true;
-      try {
-        // Severity counts come from the stats endpoint and the list from a single
-        // newest-first page, instead of downloading every finding each poll.
-        const [findingCounts, findingPage, stats, settings, pending, activity, tokens, conversationTokens] =
-          await Promise.all([
-            api.findingStats(),
-            api.findingsPage({ page: 1, pageSize: RECENT_FINDINGS, sort: "time" }),
-            api.stats(),
-            api.settings(),
-            api.interceptPending(),
-            api.activity(undefined, { limit: 30 }),
-            api.tokenStats(),
-            api.conversationTokens(),
-          ]);
-        if (!alive) return;
-        setFindingStats(findingCounts);
-        setRecentFindings(findingPage.items ?? []);
-        setStats(stats);
-        setSettings(settings);
-        setPending(pending);
-        setActivity(activity.items);
-        setTokens(tokens.total ?? null);
-        setConvTokens(conversationTokens);
-      } catch {
-        // Preserve stale data and retry on the next interval.
-      } finally {
-        loading = false;
-      }
-    };
-    void load();
-    const timer = setInterval(load, 5000);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, []);
+  usePoll(async () => {
+    try {
+      // Severity counts come from the stats endpoint and the list from a single
+      // newest-first page, instead of downloading every finding each poll.
+      const [findingCounts, findingPage, stats, settings, pending, activity, tokens, conversationTokens] =
+        await Promise.all([
+          api.findingStats(),
+          api.findingsPage({ page: 1, pageSize: RECENT_FINDINGS, sort: "time" }),
+          api.stats(),
+          api.settings(),
+          api.interceptPending(),
+          api.activity(undefined, { limit: 30 }),
+          api.tokenStats(),
+          api.conversationTokens(),
+        ]);
+      setFindingStats(findingCounts);
+      setRecentFindings(findingPage.items ?? []);
+      setStats(stats);
+      setSettings(settings);
+      setPending(pending);
+      setActivity(activity.items);
+      setTokens(tokens.total ?? null);
+      setConvTokens(conversationTokens);
+    } catch {
+      // Preserve stale data and retry on the next interval.
+    }
+  }, 5000);
 
   // slow poll: traffic, assets, usage (every 15s). LLM profiles are configuration
   // edited on the settings page, so they are fetched once per mount (retried on
   // this interval only until the first success).
-  React.useEffect(() => {
-    let alive = true;
-    let profilesLoaded = false;
-    const load = async () => {
-      try {
-        const [traf, counts, usage, profileList] = await Promise.all([
-          api.traffic(0, 50),
-          api.assetCounts(),
-          api.usageStats(365),
-          profilesLoaded ? null : api.llmProfiles(),
-        ]);
-        if (!alive) return;
-        setTraffic(traf.exchanges ?? []);
-        setAssetCounts(counts ?? {});
-        setUsageStats(usage);
-        if (profileList) {
-          profilesLoaded = true;
-          setLLMProfiles(profileList);
-        }
-      } catch {
-        /* transient errors */
+  const profilesLoaded = React.useRef(false);
+  usePoll(async () => {
+    try {
+      const [traf, counts, usage, profileList] = await Promise.all([
+        api.traffic(0, 50),
+        api.assetCounts(),
+        api.usageStats(365),
+        profilesLoaded.current ? null : api.llmProfiles(),
+      ]);
+      setTraffic(traf.exchanges ?? []);
+      setAssetCounts(counts ?? {});
+      setUsageStats(usage);
+      if (profileList) {
+        profilesLoaded.current = true;
+        setLLMProfiles(profileList);
       }
-    };
-    void load();
-    const t = setInterval(load, 15000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, []);
+    } catch {
+      /* transient errors */
+    }
+  }, 15000);
 
   // ── derived ───────────────────────────────────────────────────────────────
 

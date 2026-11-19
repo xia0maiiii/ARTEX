@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { ChevronRight, MailIcon, PlusCircleIcon } from "lucide-react";
+import { usePoll } from "@/hooks/use-poll";
 import { api } from "@/lib/api";
 
 import { Button } from "@/components/ui/button";
@@ -165,18 +166,12 @@ function NavItem({ item, isItemActive, isSubItemActive, isSubmenuOpen }: NavItem
 // count badge when there are unresolved approval requests.
 function InterceptPendingBadge() {
   const [count, setCount] = React.useState(0);
-  React.useEffect(() => {
-    let live = true;
-    async function poll() {
-      try {
-        const list = await api.interceptPending();
-        if (live) setCount(list.length);
-      } catch { /* ignore */ }
-    }
-    poll();
-    const t = setInterval(poll, 5000);
-    return () => { live = false; clearInterval(t); };
-  }, []);
+  usePoll(async () => {
+    try {
+      const list = await api.interceptPending();
+      setCount(list.length);
+    } catch { /* ignore */ }
+  }, 5000);
   if (count === 0) return null;
   return (
     <SidebarMenuBadge className="flex h-4.5 min-w-[18px] items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold leading-none text-white shadow-sm ring-1 ring-amber-400/40">

@@ -52,6 +52,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { usePoll } from "@/hooks/use-poll";
 import { useSideQuestions } from "@/hooks/use-side-questions";
 import { agentDisplayName } from "@/i18n/agent-display";
 import { localizedError } from "@/i18n/errors";
@@ -60,6 +61,7 @@ import { mergeActivities } from "@/lib/activity-merge";
 import { api } from "@/lib/api";
 import { shouldSubmitOnKey, useChatSendMode } from "@/lib/chat-send-mode";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
+import { keepUnchangedItems } from "@/lib/poll";
 import { isBtwCommand } from "@/lib/side-questions";
 import type { Activity, Agent, ChatAttachment, Conversation, LLMProfile } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -1164,7 +1166,9 @@ export default function ChatPage() {
     try {
       const items = await api.conversations();
       if (seq === conversationListSeq.current) {
-        setConvs(items);
+        // Reuse unchanged rows (and the array when nothing changed), so `selected`
+        // keeps its identity and ChatView/Transcript do not re-render every 2s poll.
+        setConvs((prev) => keepUnchangedItems(prev, items, (conversation) => conversation.id));
         setConvsLoaded(true);
       }
     } catch {
@@ -1187,21 +1191,14 @@ export default function ChatPage() {
   }, []);
 
   // One list poll supplies runtime state for all sidebar rows, including the
-  // unselected ones. Await completion so slow requests do not overlap.
-  React.useEffect(() => {
-    let disposed = false;
-    let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
-      await reloadConvs();
-      if (!disposed) timer = setTimeout(() => void poll(), 2000);
-    }
-    void poll();
-    return () => {
-      disposed = true;
-      conversationListSeq.current++;
-      clearTimeout(timer);
-    };
-  }, [reloadConvs]);
+  // unselected ones. usePoll waits for each call, so slow requests do not overlap.
+  usePoll(reloadConvs, 2000);
+  React.useEffect(
+    () => () => {
+      conversationListSeq.current++; // drop a response that lands after unmount
+    },
+    [],
+  );
 
   React.useEffect(() => {
     setSelectedConversationIds((current) => {

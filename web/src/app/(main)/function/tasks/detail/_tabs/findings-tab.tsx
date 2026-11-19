@@ -15,9 +15,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { usePoll } from "@/hooks/use-poll";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import { type FindingSortField, filterAndSortFindings } from "@/lib/finding-severity";
+import { keepIfUnchanged } from "@/lib/poll";
 import { useStoredSortPreference } from "@/lib/sort-preference";
 import { SEVERITY_FILTER_OPTIONS, statusMeta } from "@/lib/status";
 import type { Finding, FindingStatus, Severity } from "@/lib/types";
@@ -159,25 +161,18 @@ export function FindingsTab({ taskId }: { taskId: string }) {
     "desc",
   );
 
-  React.useEffect(() => {
-    let active = true;
-    const load = () => {
+  // The detail page mounts this tab with key={taskId}, so taskId is fixed per instance.
+  // An unchanged snapshot keeps the previous array and skips the re-render.
+  usePoll(
+    () =>
       api
         .findings(taskId)
-        .then((fs) => {
-          if (active) setFindings(fs);
-        })
+        .then((fs) => setFindings((prev) => keepIfUnchanged(prev, fs)))
         .catch(() => {
           // Keep the last successful snapshot during transient refresh failures.
-        });
-    };
-    load();
-    const t = setInterval(load, 3000);
-    return () => {
-      active = false;
-      clearInterval(t);
-    };
-  }, [taskId]);
+        }),
+    3000,
+  );
 
   const onStatus = React.useCallback(
     async (f: Finding, next: FindingStatus) => {

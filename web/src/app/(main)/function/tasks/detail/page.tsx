@@ -37,9 +37,11 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { usePoll } from "@/hooks/use-poll";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
-import type { LLMProfile, Task } from "@/lib/types";
+import { keepIfUnchanged } from "@/lib/poll";
+import type { InterceptApprovalRow, LLMProfile, Task } from "@/lib/types";
 
 import { AssetsTab } from "./_tabs/assets-tab";
 import { BroadcastTab } from "./_tabs/broadcast-tab";
@@ -229,7 +231,10 @@ function TaskDetailInner() {
   React.useEffect(() => {
     if (TABS(liveUI).some((item) => item.value === normalizedRequestedTab)) setTab(normalizedRequestedTab);
   }, [normalizedRequestedTab, liveUI]);
-  const [interceptPendingCount, setInterceptPendingCount] = React.useState(0);
+  // Pending intercepts are fetched once here: the tab badge needs the count and
+  // SessionsTab gets the rows as a prop (it used to poll the same endpoint itself).
+  const [pendingIntercepts, setPendingIntercepts] = React.useState<InterceptApprovalRow[]>([]);
+  const interceptPendingCount = pendingIntercepts.length;
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
   const [archiving, setArchiving] = React.useState(false);
 
@@ -240,59 +245,59 @@ function TaskDetailInner() {
       .catch(() => setProfiles([]));
   }, []);
 
-  React.useEffect(() => {
-    let alive = true;
-    const load = () =>
+  // Search-param navigation to another task keeps this component mounted, so poll
+  // responses check that they still belong to the current id.
+  const currentId = React.useRef(id);
+
+  const refreshIntercepts = usePoll(
+    () =>
       api
         .interceptTask(id)
         .then((rows) => {
-          if (alive) setInterceptPendingCount(rows.filter((r) => r.status === "pending").length);
+          if (currentId.current !== id) return;
+          const pending = rows.filter((r) => r.status === "pending");
+          setPendingIntercepts((prev) => keepIfUnchanged(prev, pending));
         })
         .catch(() => {
           // Polling is best-effort; the next interval retries automatically.
-        });
-    void load();
-    const t = setInterval(load, 5000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, [id]);
+        }),
+    5000,
+    { immediate: false },
+  );
 
-  const taskLoadInFlight = React.useRef<string | null>(null);
-  const load = React.useCallback(() => {
-    if (taskLoadInFlight.current === id) return;
-    taskLoadInFlight.current = id;
-    Promise.all([api.task(id), api.stats(id).catch(() => null)])
-      .then(([task, s]) => {
-        if (taskLoadInFlight.current !== id) return;
-        const base = { ...task };
-        const at = s?.active_task;
-        if (at) {
-          base.in_flight = at.in_flight;
-          base.goals_total = at.goals_total;
-          base.goals_met = at.goals_met;
-          base.engine_mode = s?.engine_mode ?? at.engine_mode;
-          base.paused = at.paused;
-        }
-        setTask(base);
-        setPaused(at?.paused ?? base.paused ?? false);
-      })
-      .catch(() => {
-        // Keep the last rendered task state during a transient poll failure.
-      })
-      .finally(() => {
-        if (taskLoadInFlight.current === id) {
-          taskLoadInFlight.current = null;
-          setLoaded(true);
-        }
-      });
-  }, [id]);
+  const load = usePoll(
+    () =>
+      Promise.all([api.task(id), api.stats(id).catch(() => null)])
+        .then(([task, s]) => {
+          if (currentId.current !== id) return;
+          const base = { ...task };
+          const at = s?.active_task;
+          if (at) {
+            base.in_flight = at.in_flight;
+            base.goals_total = at.goals_total;
+            base.goals_met = at.goals_met;
+            base.engine_mode = s?.engine_mode ?? at.engine_mode;
+            base.paused = at.paused;
+          }
+          setTask((prev) => keepIfUnchanged(prev, base));
+          setPaused(at?.paused ?? base.paused ?? false);
+        })
+        .catch(() => {
+          // Keep the last rendered task state during a transient poll failure.
+        })
+        .finally(() => {
+          if (currentId.current === id) setLoaded(true);
+        }),
+    5000,
+    { immediate: false },
+  );
+
+  // First load, and an immediate reload when the id changes (instead of waiting a tick).
   React.useEffect(() => {
-    load();
-    const timer = setInterval(load, 5000);
-    return () => clearInterval(timer);
-  }, [load]);
+    currentId.current = id;
+    void refreshIntercepts();
+    void load();
+  }, [id, refreshIntercepts, load]);
 
   async function togglePause() {
     if (task && ["done", "failed", "timeout"].includes(task.status)) return;
@@ -469,7 +474,7 @@ function TaskDetailInner() {
                     .testTaskProxy(task.id)
                     .then((r) =>
                       r.ok
-                        ? (toast.success(ui("screen.1eb30f37b2b98e")), load())
+                        ? (toast.success(ui("screen.1eb30f37b2b98e")), void load())
                         : toast.error(r.error || ui("screen.d930b3659bf944")),
                     )
                     .catch((e) => toast.error((e as Error).message))
@@ -506,7 +511,12 @@ function TaskDetailInner() {
       {/* Tab content */}
       <div className="flex-1 p-4 lg:p-6">
         <TabsContent value="sessions" className="mt-0">
-          <SessionsTab key={id} taskId={id} requestedSession={searchParams.get("session") ?? ""} />
+          <SessionsTab
+            key={id}
+            taskId={id}
+            requestedSession={searchParams.get("session") ?? ""}
+            pendingIntercepts={pendingIntercepts}
+          />
         </TabsContent>
         <TabsContent value="traffic" className="mt-0">
           <TrafficHistory taskId={id} />
@@ -524,7 +534,7 @@ function TaskDetailInner() {
           <IntelligencePanel scope="tasks" scopeId={id} />
         </TabsContent>
         <TabsContent value="findings" className="mt-0">
-          <FindingsTab taskId={id} />
+          <FindingsTab key={id} taskId={id} />
         </TabsContent>
         <TabsContent value="retests" className="mt-0">
           <RetestsTab key={id} taskId={id} />
