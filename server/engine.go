@@ -1060,11 +1060,35 @@ func (e *Engine) workerLoop(ctx context.Context, t *Task, slot WorkerSlot) {
 		if !e.beginTaskOperation(t.ID) {
 			return
 		}
+		// Take the wake channel before looking at the frontier so an intent added
+		// between an empty claim and the wait still wakes this worker.
+		wake := db.FrontierChanged(t.Store.ID())
 		claimed := e.runWorkerStep(ctx, t, name, worker)
 		e.decInflight(t.ID)
-		if !claimed && sleepCtx(ctx, 800*time.Millisecond) {
+		if !claimed && waitFrontier(ctx, wake, workerIdleRecheck) {
 			return
 		}
+	}
+}
+
+// workerIdleRecheck is how often an idle worker re-checks the frontier when no
+// wake signal arrives. New and reopened intents wake it immediately through
+// db.FrontierChanged; this only bounds the latency for writes that bypass the
+// signal. (Previously every idle worker polled Frontier(20) every 800ms.)
+const workerIdleRecheck = 5 * time.Second
+
+// waitFrontier blocks until the frontier may have changed, the fallback interval
+// elapses, or ctx ends. It reports true when ctx is done.
+func waitFrontier(ctx context.Context, wake <-chan struct{}, fallback time.Duration) (done bool) {
+	timer := time.NewTimer(fallback)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return true
+	case <-wake:
+		return false
+	case <-timer.C:
+		return false
 	}
 }
 

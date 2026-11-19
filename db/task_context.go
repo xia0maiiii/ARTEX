@@ -574,5 +574,8 @@ WHERE exploration_id=$1 AND kind='intent' AND state='blocked' AND blocked_reason
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
+	if n > 0 {
+		notifyFrontier(s.expID)
+	}
 	return n, nil
 }

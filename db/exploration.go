@@ -213,7 +213,13 @@ VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
 			return 0, err
 		}
 	}
-	return id, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	if kind == KindIntent && state == "open" {
+		notifyFrontier(s.expID)
+	}
+	return id, nil
 }
 
 // AddIntent is a convenience: an open intent.
@@ -267,6 +273,9 @@ ON CONFLICT (exploration_id, src_id, rel, dst_id) DO NOTHING`, s.expID, from, re
 // so a folded member's state flip invalidates its digest's cached body (§5.3).
 func (s *ExplorationStore) SetNodeState(id int64, state string) error {
 	_, err := s.db.Exec(`UPDATE exploration_nodes SET state=$1, blocked_reason=NULL, content_version=content_version+1 WHERE id=$2 AND exploration_id=$3`, state, id, s.expID)
+	if err == nil && state == "open" {
+		notifyFrontier(s.expID)
+	}
 	return err
 }
 
@@ -316,6 +325,9 @@ WHERE exploration_id=$1 AND kind='intent' AND state='running'`, s.expID)
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
+	if n > 0 {
+		notifyFrontier(s.expID)
+	}
 	return n, nil
 }
 
@@ -332,6 +344,9 @@ WHERE id=$1 AND exploration_id=$2 AND kind='intent'
 		return false, err
 	}
 	n, _ := res.RowsAffected()
+	if n > 0 {
+		notifyFrontier(s.expID)
+	}
 	return n > 0, nil
 }
 
@@ -345,6 +360,9 @@ WHERE exploration_id=$1 AND kind='intent' AND state='blocked'`, s.expID)
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
+	if n > 0 {
+		notifyFrontier(s.expID)
+	}
 	return n, nil
 }
 
@@ -354,6 +372,9 @@ func (s *ExplorationStore) SetIntentState(id int64, state string) error {
 	_, err := s.db.Exec(`UPDATE exploration_nodes
 SET state=$1, blocked_reason=NULL, content_version=content_version+1, completed_at = CASE WHEN $4 THEN now() ELSE NULL END
 WHERE id=$2 AND exploration_id=$3 AND kind='intent'`, state, id, s.expID, terminal)
+	if err == nil && state == "open" {
+		notifyFrontier(s.expID)
+	}
 	return err
 }
 
@@ -369,6 +390,9 @@ WHERE id=$2 AND exploration_id=$3 AND kind='intent' AND state=$4`, state, id, s.
 		return false, err
 	}
 	n, err := res.RowsAffected()
+	if n == 1 && state == "open" {
+		notifyFrontier(s.expID)
+	}
 	return n == 1, err
 }
 

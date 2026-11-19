@@ -490,6 +490,7 @@ RETURNING id, created_at`, s.expID, audit.NodeID, utf8Clean(audit.Worker), utf8C
 	if err := tx.Commit(); err != nil {
 		return 0, Activity{}, err
 	}
+	notifyFrontier(s.expID)
 	return intentID, audit, nil
 }
 
