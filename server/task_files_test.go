@@ -396,7 +396,7 @@ func TestTaskFilesRealDirectory(t *testing.T) {
 }
 
 func TestTaskFilesIntentMetadata(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Skipf("isolated PostgreSQL required: %v", err)
 	}

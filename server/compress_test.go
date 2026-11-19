@@ -79,7 +79,7 @@ func TestWithCompressionBypassesEventStreams(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.(http.Flusher).Flush() // headers only, no event yet
 		<-release
-		fmt.Fprint(w, "id: 1\ndata: {}\n\n")
+		_, _ = fmt.Fprint(w, "id: 1\ndata: {}\n\n")
 	}))
 	srv := httptest.NewServer(h)
 	defer srv.Close()
@@ -93,7 +93,7 @@ func TestWithCompressionBypassesEventStreams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("headers were not flushed before the first event: %v", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	if enc := resp.Header.Get("Content-Encoding"); enc != "" {
 		t.Fatalf("event stream must not be compressed, got %q", enc)
 	}

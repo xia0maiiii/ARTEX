@@ -70,7 +70,8 @@ func TestNoResultCoordinatorTerminalExitAllowsRevival(t *testing.T) {
 }
 
 func TestNoResultCheckpointAndRevival(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	requireTestPG(t)
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +161,8 @@ func TestNoResultCheckpointAndRevival(t *testing.T) {
 }
 
 func TestNoResultCoordinatorStopsAndReleasesMarker(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	requireTestPG(t)
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Fatal(err)
 	}

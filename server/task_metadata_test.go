@@ -13,7 +13,7 @@ import (
 )
 
 func TestTaskMetadataPatchReturnsRenameAndPin(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
@@ -61,7 +61,7 @@ func TestTaskMetadataPatchReturnsRenameAndPin(t *testing.T) {
 }
 
 func TestTaskMetadataPatchGlobalAssetSharing(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestTaskMetadataPatchGlobalAssetSharing(t *testing.T) {
 }
 
 func TestConversationBatchDeleteReportsMissing(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}

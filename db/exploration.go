@@ -1243,7 +1243,7 @@ FROM exploration_nodes WHERE exploration_id=$1 GROUP BY kind`, s.expID)
 	if err != nil {
 		return out, err
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 	for rows.Next() {
 		var kind string
 		var total, running, met int

@@ -11,7 +11,7 @@ import (
 )
 
 func TestUpdateSettingsHTTPPersistence(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}

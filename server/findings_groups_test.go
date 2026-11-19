@@ -17,7 +17,8 @@ import (
 )
 
 func TestFindingGroupsNoResultStopReason(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	requireTestPG(t)
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +113,7 @@ func TestFindingPaginationParam(t *testing.T) {
 }
 
 func TestFindingGroupsReturnsTaskBucketsAndNormalizesPagination(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
@@ -222,7 +223,7 @@ func TestFindingGroupsReturnsTaskBucketsAndNormalizesPagination(t *testing.T) {
 }
 
 func TestDeepenFindingCreatesAuditedIntentAndRevivesTask(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
@@ -351,7 +352,7 @@ func TestDeepenFindingValidatesDescription(t *testing.T) {
 }
 
 func TestDeepenAdmissionFailureDiscardsFollowUpIntent(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) - skipping", err)
 	}

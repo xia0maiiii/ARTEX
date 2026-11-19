@@ -18,7 +18,7 @@ func manualScheduleTestServer(t *testing.T) (*Server, *Scheduler) {
 	if os.Getenv("ARTEX_PG_DSN") == "" {
 		t.Skip("requires isolated ARTEX_PG_DSN")
 	}
-	m, err := NewManager(t.TempDir(), "")
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Fatal(err)
 	}

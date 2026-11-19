@@ -43,7 +43,7 @@ func TestFrontierSignalFiresOnClaimableIntent(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer d.Close()
+	defer d.Close() //nolint:errcheck
 	expID, err := d.CreateExploration("frontier signal", "goal")
 	if err != nil {
 		t.Fatal(err)

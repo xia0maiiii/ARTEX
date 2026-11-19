@@ -79,7 +79,7 @@ func TestValidateWorkerPools(t *testing.T) {
 }
 
 func TestWorkerPoolSettingsRoundTrip(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestWorkerPoolSettingsRoundTrip(t *testing.T) {
 }
 
 func TestPinnedRuntimeMissingProfileDoesNotFallback(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestPinnedRuntimeMissingProfileDoesNotFallback(t *testing.T) {
 }
 
 func TestPinnedRuntimeQuotaDoesNotAdvanceTaskFailover(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
@@ -257,7 +257,7 @@ func taskIDInt(t *testing.T, id string) int64 {
 }
 
 func TestPinnedWorkerLoopDoesNotConsultTaskRouterAndReportsFailureOnce(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestPinnedWorkerLoopDoesNotConsultTaskRouterAndReportsFailureOnce(t *testin
 }
 
 func TestPinnedWorkerAvailabilityRecoveryUsesSystemSession(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestPinnedWorkerAvailabilityRecoveryUsesSystemSession(t *testing.T) {
 }
 
 func TestDetachedIntentPinnedOwnerUsesPinnedResolver(t *testing.T) {
-	m, err := NewManager(t.TempDir(), "")
+	m, err := NewManager(testDataDir(t), "")
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}

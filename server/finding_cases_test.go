@@ -18,6 +18,7 @@ import (
 
 func testCaseServer(t *testing.T) (*Server, int64, []int64) {
 	t.Helper()
+	requireTestPG(t)
 	dsn, _, err := db.DSN()
 	if err != nil {
 		t.Fatal(err)

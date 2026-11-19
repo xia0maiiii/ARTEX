@@ -28,7 +28,7 @@ func webuiETags(fsys fs.FS) map[string]string {
 		if err != nil {
 			return nil
 		}
-		defer f.Close()
+		defer f.Close() //nolint:errcheck // read-only
 		h := sha256.New()
 		if _, err := io.Copy(h, f); err != nil {
 			return nil
