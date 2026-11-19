@@ -337,6 +337,10 @@ CREATE INDEX IF NOT EXISTS idx_act_result_usage ON activity(exploration_id)
     INCLUDE (input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
     WHERE kind='result';
 CREATE INDEX IF NOT EXISTS idx_act_latest ON activity(exploration_id, created_at DESC);
+-- Foreign-key side of exploration_nodes deletes: ON DELETE SET NULL runs
+-- `UPDATE activity SET node_id=NULL WHERE node_id=$1` per deleted node, and
+-- idx_act_node leads with exploration_id so it can't serve that lookup.
+CREATE INDEX IF NOT EXISTS idx_act_node_id ON activity(node_id) WHERE node_id IS NOT NULL;
 
 -- main_sessions records the resettable main-agent conversation segments of a task.
 -- Segment 0 (the original session) is implicit and never stored; this table holds
@@ -1192,6 +1196,8 @@ CREATE INDEX IF NOT EXISTS idx_findings_time ON findings(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_findings_status ON findings(status, created_at DESC);
 -- 「按资产」视图靠 asset_ids @> '[<id>]' 反查发现,没有这个 GIN 索引就是全表扫。
 CREATE INDEX IF NOT EXISTS idx_findings_asset_ids ON findings USING GIN(asset_ids jsonb_path_ops);
+-- FK lookup for exploration_nodes deletes (ON DELETE SET NULL).
+CREATE INDEX IF NOT EXISTS idx_findings_node ON findings(node_id) WHERE node_id IS NOT NULL;
 
 -- 手动复测属于独立会话；结论与原漏洞处置状态分开保存。
 CREATE TABLE IF NOT EXISTS finding_retests (
@@ -1288,6 +1294,8 @@ CREATE TABLE IF NOT EXISTS side_question_sessions (
 );
 ALTER TABLE side_question_sessions ADD COLUMN IF NOT EXISTS approval_id BIGINT REFERENCES intercept_pending(id) ON DELETE CASCADE;
 ALTER TABLE side_question_sessions DROP CONSTRAINT IF EXISTS side_question_sessions_check;
+-- FK lookup for exploration_nodes deletes (ON DELETE CASCADE on intent_id).
+CREATE INDEX IF NOT EXISTS idx_side_question_sessions_intent ON side_question_sessions(intent_id) WHERE intent_id IS NOT NULL;
 ALTER TABLE side_question_sessions ADD CONSTRAINT side_question_sessions_check CHECK (approval_id IS NOT NULL OR
     (conversation_id IS NOT NULL AND task_id IS NULL AND exploration_id IS NULL AND intent_id IS NULL)
     OR (conversation_id IS NULL AND task_id IS NOT NULL AND exploration_id IS NOT NULL));
@@ -1523,6 +1531,10 @@ CREATE TABLE IF NOT EXISTS finding_case_suggestions (
 -- A suggestion is a group.  left_id/right_id remain compatibility anchors for
 -- old clients and are kept at the two smallest surviving member ids.
 ALTER TABLE finding_case_suggestions DROP CONSTRAINT IF EXISTS finding_case_suggestions_left_id_right_id_key;
+-- Dropping the unique constraint also dropped its index; the findings FK cascade
+-- and the BEFORE DELETE re-anchor trigger below both look up by left_id/right_id.
+CREATE INDEX IF NOT EXISTS idx_finding_case_suggestions_left ON finding_case_suggestions(left_id);
+CREATE INDEX IF NOT EXISTS idx_finding_case_suggestions_right ON finding_case_suggestions(right_id);
 CREATE TABLE IF NOT EXISTS finding_case_suggestion_members (
     suggestion_id BIGINT NOT NULL REFERENCES finding_case_suggestions(id) ON DELETE CASCADE,
     finding_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
@@ -1575,6 +1587,8 @@ CREATE TABLE IF NOT EXISTS finding_case_blocks (
     reason TEXT NOT NULL,
     PRIMARY KEY(left_id,right_id), CHECK(left_id < right_id)
 );
+-- The PK covers left_id; the findings FK cascade also needs right_id.
+CREATE INDEX IF NOT EXISTS idx_finding_case_blocks_right ON finding_case_blocks(right_id);
 CREATE OR REPLACE FUNCTION finding_case_changed() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE cid BIGINT; remaining INTEGER;
 BEGIN
@@ -1648,6 +1662,8 @@ CREATE TABLE IF NOT EXISTS task_intelligence (
 );
 CREATE INDEX IF NOT EXISTS idx_task_intelligence_task ON task_intelligence(task_id,id DESC);
 CREATE INDEX IF NOT EXISTS idx_task_intelligence_assets ON task_intelligence USING gin(asset_ids);
+-- FK lookup for exploration_nodes deletes (ON DELETE SET NULL).
+CREATE INDEX IF NOT EXISTS idx_task_intelligence_node ON task_intelligence(node_id) WHERE node_id IS NOT NULL;
 
 -- Optional derived credential presentation; raw intelligence remains authoritative.
 ALTER TABLE task_intelligence ADD COLUMN IF NOT EXISTS credential_analysis JSONB;

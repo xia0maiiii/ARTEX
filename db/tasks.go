@@ -795,7 +795,7 @@ func (d *DB) DeleteTaskCascadePrepared(
 		// evidence anchored by another task.
 		res, err := tx.Exec(`
 WITH candidate_assets AS (
-  SELECT id FROM assets WHERE $1 = ANY(task_ids)
+  SELECT id FROM assets WHERE task_ids @> ARRAY[$1]::bigint[]
   UNION
   SELECT ea.asset_id
   FROM exploration_anchors ea
@@ -823,7 +823,7 @@ DELETE FROM assets a USING deletable d WHERE a.id=d.id`, id, expID)
 		}
 		result.AssetsDeleted, _ = res.RowsAffected()
 
-		res, err = tx.Exec(`UPDATE assets SET task_ids = array_remove(task_ids, $1) WHERE $1 = ANY(task_ids)`, id)
+		res, err = tx.Exec(`UPDATE assets SET task_ids = array_remove(task_ids, $1) WHERE task_ids @> ARRAY[$1]::bigint[]`, id)
 		if err != nil {
 			return result, err
 		}
@@ -837,7 +837,7 @@ DELETE FROM assets a USING deletable d WHERE a.id=d.id`, id, expID)
 		result.FindingsDeleted, _ = res.RowsAffected()
 	}
 	if deleteLLMRecords {
-		res, err := tx.Exec(`DELETE FROM llm_records WHERE COALESCE(task_id,'')=$1`, strconv.FormatInt(id, 10))
+		res, err := tx.Exec(`DELETE FROM llm_records WHERE task_id=$1`, strconv.FormatInt(id, 10))
 		if err != nil {
 			return result, err
 		}

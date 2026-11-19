@@ -1165,7 +1165,7 @@ func (s *AssetStore) QueryByTask(taskID int64, typ string, limit, offset int) ([
        COALESCE(favicon_mmh3,''), status_code, content_length,
        COALESCE(page_title,''), array_to_json(technologies)::text, array_to_json(auth)::text,
        COALESCE(method,''), array_to_json(params)::text, extra, last_seen::text
-FROM assets WHERE $1 = ANY(task_ids)`
+FROM assets WHERE task_ids @> ARRAY[$1]::bigint[]`
 	args := []any{taskID}
 	if typ != "" {
 		args = append(args, typ)
@@ -1188,7 +1188,7 @@ FROM assets WHERE $1 = ANY(task_ids)`
 }
 
 func (s *AssetStore) CountByTask(taskID int64, typ string) (int, error) {
-	q := `SELECT count(*) FROM assets WHERE $1 = ANY(task_ids)`
+	q := `SELECT count(*) FROM assets WHERE task_ids @> ARRAY[$1]::bigint[]`
 	args := []any{taskID}
 	if typ != "" {
 		args = append(args, typ)
@@ -1200,7 +1200,7 @@ func (s *AssetStore) CountByTask(taskID int64, typ string) (int, error) {
 }
 
 func (s *AssetStore) CountsByTypeForTask(taskID int64) (map[string]int, error) {
-	rows, err := s.db.Query(`SELECT type, COUNT(*) FROM assets WHERE $1 = ANY(task_ids) GROUP BY type`, taskID)
+	rows, err := s.db.Query(`SELECT type, COUNT(*) FROM assets WHERE task_ids @> ARRAY[$1]::bigint[] GROUP BY type`, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -1218,7 +1218,7 @@ func (s *AssetStore) DeleteByTaskID(taskID int64) (int64, error) {
 		return 0, err
 	}
 	deleted, _ := res.RowsAffected()
-	if _, err := s.db.Exec(`UPDATE assets SET task_ids = array_remove(task_ids, $1) WHERE $1 = ANY(task_ids)`, taskID); err != nil {
+	if _, err := s.db.Exec(`UPDATE assets SET task_ids = array_remove(task_ids, $1) WHERE task_ids @> ARRAY[$1]::bigint[]`, taskID); err != nil {
 		return deleted, err
 	}
 	return deleted, nil
@@ -1230,7 +1230,7 @@ func (s *AssetStore) DeleteByTaskID(taskID int64) (int64, error) {
 func (s *AssetStore) HostsByTask(taskID int64) ([]string, error) {
 	rows, err := s.db.Query(`
 SELECT COALESCE(domain,''), COALESCE(ip,''), COALESCE(url,'')
-FROM assets WHERE $1 = ANY(task_ids)`, taskID)
+FROM assets WHERE task_ids @> ARRAY[$1]::bigint[]`, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -1285,7 +1285,7 @@ type rowsQuerier interface {
 func hostsForTaskDeletion(q rowsQuerier, taskID, explorationID int64) ([]string, error) {
 	rows, err := q.Query(`
 WITH current_assets AS (
-  SELECT id FROM assets WHERE $1 = ANY(task_ids)
+  SELECT id FROM assets WHERE task_ids @> ARRAY[$1]::bigint[]
   UNION
   SELECT ea.asset_id
   FROM exploration_anchors ea

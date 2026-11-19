@@ -88,7 +88,7 @@ SELECT COALESCE(NULLIF(model,''),'(unknown)') AS model, COUNT(*) AS calls,
        COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
        COALESCE(SUM(cache_read),0), COALESCE(SUM(cache_write),0)
 FROM llm_usage
-WHERE COALESCE(task_id,'') = $1
+WHERE task_id = $1
 GROUP BY model
 ORDER BY SUM(input_tokens) + SUM(output_tokens) DESC, model`, taskID)
 	if err != nil {

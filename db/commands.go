@@ -57,7 +57,7 @@ func (d *DB) ToolStats(expID *int64, q string) ([]ToolStat, error) {
 SELECT COALESCE(NULLIF(u.tool,''),'-') AS tool, COUNT(*) AS total,
        COUNT(*) FILTER (WHERE COALESCE(r.is_error,false)) AS errors
 FROM activity u
-LEFT JOIN activity r ON r.tool_use_id = u.tool_use_id AND r.kind = 'tool_result'
+LEFT JOIN activity r ON r.exploration_id = u.exploration_id AND r.tool_use_id = u.tool_use_id AND r.kind = 'tool_result'
 `+where+`
 GROUP BY 1
 ORDER BY total DESC, tool ASC`, args...)
@@ -103,7 +103,7 @@ func (d *DB) ListCommands(expID *int64, q string, page, size int) ([]CommandReco
 SELECT u.id, u.exploration_id, COALESCE(u.worker,''), COALESCE(u.tool,''), COALESCE(u.detail,''),
        COALESCE(r.detail,''), COALESCE(r.is_error, false), u.created_at
 FROM activity u
-LEFT JOIN activity r ON r.tool_use_id = u.tool_use_id AND r.kind = 'tool_result'
+LEFT JOIN activity r ON r.exploration_id = u.exploration_id AND r.tool_use_id = u.tool_use_id AND r.kind = 'tool_result'
 ` + where + `
 ORDER BY u.id DESC
 LIMIT $` + fmt.Sprintf("%d", argN) + ` OFFSET $` + fmt.Sprintf("%d", argN+1)
@@ -185,6 +185,9 @@ ALTER TABLE llm_records ADD COLUMN IF NOT EXISTS worker TEXT;
 ALTER TABLE llm_records ADD COLUMN IF NOT EXISTS profile_name TEXT;
 ALTER TABLE llm_records ADD COLUMN IF NOT EXISTS raw_request TEXT;
 ALTER TABLE llm_records ADD COLUMN IF NOT EXISTS raw_response TEXT;
+-- Per-task list/delete/archive filters; (task_id, id DESC) also serves the
+-- list's ORDER BY id DESC. Lives here, after ADD COLUMN, for pre-task_id tables.
+CREATE INDEX IF NOT EXISTS idx_llm_records_task ON llm_records(task_id, id DESC);
 `
 
 // EnsureLLMRecordsTable creates the llm_records table if it does not exist.
@@ -242,7 +245,7 @@ func (d *DB) ListLLMRecords(model, session, task string, page, size int) ([]LLMR
 		argN++
 	}
 	if task != "" {
-		where += fmt.Sprintf(` AND COALESCE(task_id,'') = $%d`, argN)
+		where += fmt.Sprintf(` AND task_id = $%d`, argN)
 		args = append(args, task)
 		argN++
 	}
@@ -317,7 +320,7 @@ WHERE COALESCE(task_id,'') <> '' GROUP BY task_id ORDER BY MAX(id) DESC`)
 // DeleteLLMRecords removes every LLM record for one exact task_id — the same
 // match the page's task picker/filter uses. Returns rows deleted.
 func (d *DB) DeleteLLMRecords(task string) (int64, error) {
-	res, err := d.Exec(`DELETE FROM llm_records WHERE COALESCE(task_id,'') = $1`, task)
+	res, err := d.Exec(`DELETE FROM llm_records WHERE task_id = $1`, task)
 	if err != nil {
 		return 0, err
 	}

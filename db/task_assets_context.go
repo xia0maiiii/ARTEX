@@ -30,7 +30,7 @@ visible_assets AS (
     SELECT 1 FROM tasks current
     WHERE current.id=$1 AND current.deleted_at IS NULL AND current.share_global_assets
   )
-  OR EXISTS (SELECT 1 FROM context_tasks ctx WHERE ctx.task_id=ANY(a.task_ids))
+  OR a.task_ids && ARRAY(SELECT task_id FROM context_tasks)
   OR EXISTS (
     SELECT 1 FROM exploration_anchors anchor
     JOIN exploration_nodes node ON node.id=anchor.node_id
@@ -58,7 +58,7 @@ target AS (
   WHERE a.id IN (SELECT id FROM visible_assets)
     UNION
     SELECT a.id,a.type,COALESCE(a.url,a.domain,a.ip,a.app_name,a.root_domain,'') AS label
-    FROM assets a WHERE EXISTS (SELECT 1 FROM context_tasks ctx WHERE ctx.task_id=ANY(a.task_ids))
+    FROM assets a WHERE a.task_ids && ARRAY(SELECT task_id FROM context_tasks)
 	UNION
 	SELECT a.id, a.type,
 	       COALESCE(a.url, a.domain, a.ip, a.app_name, a.root_domain, '') AS label
@@ -195,7 +195,7 @@ func (s *AssetStore) HostsByTaskWithSources(taskID int64) ([]string, error) {
 context_assets AS (
   SELECT DISTINCT a.id
   FROM assets a
-  WHERE EXISTS (SELECT 1 FROM context_tasks ctx WHERE ctx.task_id=ANY(a.task_ids))
+  WHERE a.task_ids && ARRAY(SELECT task_id FROM context_tasks)
   UNION
   SELECT ea.asset_id
   FROM exploration_anchors ea
