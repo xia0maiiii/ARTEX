@@ -20,10 +20,11 @@ vm.runInNewContext(
     exports: exportsObject,
     Error,
     URLSearchParams,
-    process: { env: {} },
+    process: { env: { NEXT_PUBLIC_MOCK: "1" } },
     require: (id) => {
       if (id === "@/lib/mock/enabled") return { MOCK: true };
       if (id === "@/lib/mock/handler") return { mockHandle };
+      if (id === "@/lib/mock/task-files") return require("./mock/task-files.ts");
       throw new Error(`Unexpected import: ${id}`);
     },
     fetch: () => {

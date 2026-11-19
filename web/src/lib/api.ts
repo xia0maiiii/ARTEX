@@ -5,7 +5,9 @@
 
 import type { ChatMention } from "@/lib/chat-mentions";
 import { MOCK } from "@/lib/mock/enabled";
-import { mockHandle, mockTaskFileURL } from "@/lib/mock/handler";
+// Only the small, synchronous task-file URL helper is imported statically; the mock
+// router (handler.ts + data.ts) is loaded on demand via loadMockHandler() below.
+import { mockTaskFileURL } from "@/lib/mock/task-files";
 import type {
   ActiveFindingRetest,
   Activity,
@@ -222,8 +224,20 @@ export class ApiError extends Error {
   }
 }
 
+// loadMockHandler lazily loads the mock router. The env check duplicates MOCK on
+// purpose: next.config.mjs always inlines NEXT_PUBLIC_MOCK, so the bundler sees this
+// import() is dead in real builds and emits no mock chunk at all. It cannot see
+// through the imported MOCK binding when building the chunk graph.
+const loadMockHandler = () =>
+  process.env.NEXT_PUBLIC_MOCK === "1"
+    ? import("@/lib/mock/handler")
+    : Promise.reject(new Error("mock handler is only available in NEXT_PUBLIC_MOCK=1 builds"));
+
 export async function http<T>(path: string, init?: RequestInit): Promise<T> {
-  if (MOCK) return mockHandle<T>(init?.method ?? "GET", path, init?.body ?? null);
+  if (MOCK) {
+    const { mockHandle } = await loadMockHandler();
+    return mockHandle<T>(init?.method ?? "GET", path, init?.body ?? null);
+  }
   const token = getToken();
   const r = await apiFetch(`/api${path}`, {
     ...init,
@@ -277,28 +291,6 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
 //
 // Override either default with NEXT_PUBLIC_SSE_BASE (set it to "" to force same-origin).
 // Token is appended as ?token= because SSE can't carry cookies cross-origin.
-// mockReport returns a canned Markdown report for the demo.
-function mockReport(_task?: string): string {
-  return `# ARTEX 渗透测试报告 — Acme Corp
-
-## 概览
-- 范围：acme.com（含 www / admin / api / shop / vpn 子域）
-- 已确认发现：6 项（高危 3 · 中危 3 · 低危 2）
-- 引擎模式：exploring
-
-## 关键发现
-1. **[高] 后台默认口令** admin.acme.com admin/admin123 → 可完全接管后台。
-2. **[高] SQL 注入** www.acme.com/search?q= → 可读取 acme_prod 库。
-3. **[高] IDOR** api.acme.com/v1/orders?id= → 可越权读取他人订单（含手机号/地址）。
-4. **[中] 反射型 XSS**、**暴露 .git 源码**、**登录无速率限制**。
-
-## 建议
-- 后台强制改密 + 启用 MFA、封禁默认口令。
-- search 接口参数化查询、输出编码。
-- API 增加对象级授权校验（IDOR）、更换强 JWT 密钥。
-
-> （demo）本报告由 mock 数据生成，仅用于界面演示。`;
-}
 
 export function sseUrl(path: string): string {
   const base =
@@ -1255,7 +1247,10 @@ export const api = {
   },
   notifyRetryDelivery: (id: number) => post<{ ok: boolean }>(`/notify/deliveries/${id}/retry`),
   report: async (task?: string) => {
-    if (MOCK) return mockReport(task);
+    if (MOCK) {
+      const { mockReport } = await loadMockHandler();
+      return mockReport(task);
+    }
     const token = getToken();
     const r = await apiFetch(`/api/report${tq(task)}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},

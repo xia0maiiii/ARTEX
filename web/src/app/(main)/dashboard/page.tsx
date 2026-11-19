@@ -29,23 +29,23 @@ import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { api } from "@/lib/api";
 import type {
   Activity,
-  Agent,
   ConvTokenSummary,
   Finding,
+  FindingStats,
   InterceptPending,
   LLMProfile,
-  MCPServer,
   Settings,
-  SkillItem,
   Stats,
   SystemMetrics,
   Task,
   TokenTotal,
-  Tool,
   TrafficExchange,
   UsageStats,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+// Number of newest findings listed in the dashboard's findings card.
+const RECENT_FINDINGS = 8;
 
 // ── chart constants ───────────────────────────────────────────────────────────
 
@@ -178,7 +178,8 @@ export default function DashboardPage() {
   };
   // data state
   const [tasks, setTasks] = React.useState<Task[]>([]);
-  const [findings, setFindings] = React.useState<Finding[]>([]);
+  const [findingStats, setFindingStats] = React.useState<FindingStats | null>(null);
+  const [recentFindings, setRecentFindings] = React.useState<Finding[]>([]);
   const [stats, setStats] = React.useState<Stats | null>(null);
   const [settings, setSettings] = React.useState<Settings | null>(null);
   const [pending, setPending] = React.useState<InterceptPending[]>([]);
@@ -188,10 +189,6 @@ export default function DashboardPage() {
   const [usageStats, setUsageStats] = React.useState<UsageStats | null>(null);
   const [assetCounts, setAssetCounts] = React.useState<Record<string, number>>({});
   const [traffic, setTraffic] = React.useState<TrafficExchange[]>([]);
-  const [agents, setAgents] = React.useState<Agent[]>([]);
-  const [mcpServers, setMcpServers] = React.useState<MCPServer[]>([]);
-  const [skills, setSkills] = React.useState<SkillItem[]>([]);
-  const [tools, setTools] = React.useState<Tool[]>([]);
   const [llmProfiles, setLLMProfiles] = React.useState<LLMProfile[]>([]);
   const [systemMetrics, setSystemMetrics] = React.useState<SystemMetrics | null>(null);
 
@@ -252,17 +249,22 @@ export default function DashboardPage() {
       if (loading) return;
       loading = true;
       try {
-        const [findings, stats, settings, pending, activity, tokens, conversationTokens] = await Promise.all([
-          api.findings(),
-          api.stats(),
-          api.settings(),
-          api.interceptPending(),
-          api.activity(undefined, { limit: 30 }),
-          api.tokenStats(),
-          api.conversationTokens(),
-        ]);
+        // Severity counts come from the stats endpoint and the list from a single
+        // newest-first page, instead of downloading every finding each poll.
+        const [findingCounts, findingPage, stats, settings, pending, activity, tokens, conversationTokens] =
+          await Promise.all([
+            api.findingStats(),
+            api.findingsPage({ page: 1, pageSize: RECENT_FINDINGS, sort: "time" }),
+            api.stats(),
+            api.settings(),
+            api.interceptPending(),
+            api.activity(undefined, { limit: 30 }),
+            api.tokenStats(),
+            api.conversationTokens(),
+          ]);
         if (!alive) return;
-        setFindings(findings);
+        setFindingStats(findingCounts);
+        setRecentFindings(findingPage.items ?? []);
         setStats(stats);
         setSettings(settings);
         setPending(pending);
@@ -283,30 +285,28 @@ export default function DashboardPage() {
     };
   }, []);
 
-  // slow poll: traffic, assets, system-static (every 15s)
+  // slow poll: traffic, assets, usage (every 15s). LLM profiles are configuration
+  // edited on the settings page, so they are fetched once per mount (retried on
+  // this interval only until the first success).
   React.useEffect(() => {
     let alive = true;
+    let profilesLoaded = false;
     const load = async () => {
       try {
-        const [traf, counts, agentList, mcpList, skillList, toolList, profileList, usage] = await Promise.all([
+        const [traf, counts, usage, profileList] = await Promise.all([
           api.traffic(0, 50),
           api.assetCounts(),
-          api.agents(),
-          api.mcpServers(),
-          api.skills(),
-          api.tools(),
-          api.llmProfiles(),
           api.usageStats(365),
+          profilesLoaded ? null : api.llmProfiles(),
         ]);
         if (!alive) return;
         setTraffic(traf.exchanges ?? []);
         setAssetCounts(counts ?? {});
-        setAgents(agentList);
-        setMcpServers(mcpList);
-        setSkills(skillList);
-        setTools(toolList);
-        setLLMProfiles(profileList);
         setUsageStats(usage);
+        if (profileList) {
+          profilesLoaded = true;
+          setLLMProfiles(profileList);
+        }
       } catch {
         /* transient errors */
       }
@@ -327,13 +327,12 @@ export default function DashboardPage() {
     return m;
   }, [tasks]);
 
-  const findingsBySev = React.useMemo(() => {
-    const m = { critical: 0, high: 0, medium: 0, low: 0 };
-    for (const f of findings) {
-      if (f.severity in m) m[f.severity as keyof typeof m]++;
-    }
-    return m;
-  }, [findings]);
+  const findingsBySev = {
+    critical: findingStats?.critical ?? 0,
+    high: findingStats?.high ?? 0,
+    medium: findingStats?.medium ?? 0,
+    low: findingStats?.low ?? 0,
+  };
 
   const sortedTasks = React.useMemo(
     () =>
@@ -341,11 +340,6 @@ export default function DashboardPage() {
         .sort((a, b) => (b.last_activity_unix ?? b.created_unix ?? 0) - (a.last_activity_unix ?? a.created_unix ?? 0))
         .slice(0, 5),
     [tasks],
-  );
-
-  const recentFindings = React.useMemo(
-    () => [...findings].sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts)).slice(0, 8),
-    [findings],
   );
 
   const recentActivity = React.useMemo(
@@ -386,7 +380,6 @@ export default function DashboardPage() {
 
   // system
   const activeProfile = llmProfiles.find((p) => p.is_default);
-  const enabledTools = tools.filter((t) => t.enabled);
   const pendingCount = pending.length;
 
   // ── token stats per LLM profile ──────────────────────────────────────────
@@ -610,7 +603,7 @@ export default function DashboardPage() {
               <BugIcon className="size-3" />
               {translate("overview.confirmedFindings")}
             </div>
-            <div className="text-2xl font-semibold tabular-nums">{findings.length}</div>
+            <div className="text-2xl font-semibold tabular-nums">{findingStats?.total ?? 0}</div>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2.5 text-[10px]">
             <span className="text-rose-500">

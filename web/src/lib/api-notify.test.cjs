@@ -20,11 +20,12 @@ function client(mock, payload) {
   vm.runInNewContext(compiled, {
     exports,
     Error,
-    process: { env: {} },
+    process: { env: { NEXT_PUBLIC_MOCK: mock ? "1" : "0" } },
     URLSearchParams,
     require: (id) => {
       if (id === "@/lib/mock/enabled") return { MOCK: mock };
       if (id === "@/lib/mock/handler") return { mockHandle };
+      if (id === "@/lib/mock/task-files") return require("./mock/task-files.ts");
       throw new Error(`Unexpected runtime import: ${id}`);
     },
     fetch: async () => {

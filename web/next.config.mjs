@@ -1,4 +1,8 @@
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+
+// 只把需要的字段注入前端，避免客户端代码 import 整个 package.json（含全部依赖清单）。
+const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
 
 // 静态导出：`NEXT_EXPORT=1 next build` 产出纯静态目录到 web/out，可直接丢进
 // nginx web 根目录运行。开发(next dev)不设该变量，保留 /api 反代与热更新。
@@ -11,6 +15,12 @@ const nextConfig = {
   // 避免父目录的 lockfile 影响根目录推断及资源路径生成。
   turbopack: { root: fileURLToPath(new URL(".", import.meta.url)) },
   reactCompiler: true,
+  env: {
+    NEXT_PUBLIC_APP_VERSION: pkg.version,
+    // 未设置的 NEXT_PUBLIC_* 不会被内联，`MOCK` 会变成运行时判断；这里总是显式定义，
+    // 让非 mock 构建把 MOCK 编译成常量 false，mock 分支及其 import() 才能被裁掉。
+    NEXT_PUBLIC_MOCK: isMock ? "1" : "0",
+  },
   // 允许从局域网 IP 访问 dev 资源（HMR），按需增删。
   // dev 阶段放开任意 IPv4 来源访问 /_next/* 与 HMR（局域网 IP 变动也不受影响）。
   // 注意：Next 出于安全禁止裸 "*"，需用分段通配；"*.*.*.*" 匹配任意 IPv4。

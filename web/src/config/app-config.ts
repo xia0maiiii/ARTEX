@@ -1,10 +1,10 @@
-import packageJson from "../../package.json";
-
 const currentYear = new Date().getFullYear();
 
 export const APP_CONFIG = {
   name: "ARTEX",
-  version: packageJson.version,
+  // Injected at build time by next.config.mjs (env.NEXT_PUBLIC_APP_VERSION) so the
+  // client bundle does not embed the whole package.json.
+  version: process.env.NEXT_PUBLIC_APP_VERSION ?? "",
   copyright: `© ${currentYear}, ARTEX.`,
   meta: {
     title: "ARTEX — 自主渗透测试控制台",
